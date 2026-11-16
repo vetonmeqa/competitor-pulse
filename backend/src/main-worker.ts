@@ -23,7 +23,9 @@ const startedAt = new Date().toISOString();
 
 const config = loadConfig();
 const log = createLogger(config.LOG_LEVEL, "worker");
-const { db, pool } = createDb(config.DATABASE_URL);
+const { db, pool } = createDb(config.DATABASE_URL, 10, (error) => {
+  log.warn({ err: error }, "an idle database connection was dropped");
+});
 
 // One signal stops every loop. In-flight work is finished before the process exits.
 const shutdown = new AbortController();
