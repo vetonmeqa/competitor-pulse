@@ -10,6 +10,7 @@ import {
   LlmError,
   type LlmProvider,
 } from "../../src/summarizer/llm-provider.js";
+import { BATCH_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../../src/summarizer/prompt.js";
 import { Summarizer } from "../../src/summarizer/summarizer.js";
 import { SummaryStore } from "../../src/summarizer/summary-store.js";
 import {
@@ -54,6 +55,30 @@ const fail = (kind: LlmError["kind"]) => (): string => {
   throw new LlmError(kind, `simulated ${kind}`);
 };
 
+interface BatchEntry {
+  id: number;
+  summary: string;
+}
+
+/** The snapshot ids a batch prompt asks about, in the order they appear. */
+const idsIn = (user: string): number[] =>
+  [...user.matchAll(/^### Change id (\d+)$/gm)].map((match) => Number(match[1]));
+
+const isBatch = (request: CompletionRequest): boolean => request.system === BATCH_SYSTEM_PROMPT;
+
+/**
+ * A model that answers both forms correctly: JSON for a batch, plain text for a single
+ * change. `edit` can break the batch answer to simulate a model that gets it wrong.
+ */
+const answer =
+  (edit: (entries: BatchEntry[]) => unknown = (entries) => ({ summaries: entries })) =>
+  (request: CompletionRequest): string =>
+    isBatch(request)
+      ? JSON.stringify(
+          edit(idsIn(request.user).map((id) => ({ id, summary: `Summary for change ${id}.` }))),
+        )
+      : "Summarised on its own.";
+
 interface Running {
   summarizer: Summarizer;
   breaker: CircuitBreaker;
@@ -81,6 +106,7 @@ function startSummarizer(
   options: {
     dailyCap?: number;
     maxAttempts?: number;
+    batchSize?: number;
     concurrency?: number;
     timeoutMs?: number;
     maxAgeHours?: number;
@@ -98,6 +124,7 @@ function startSummarizer(
     log: options.logger ?? log,
     timeoutMs: options.timeoutMs ?? 200,
     maxAttempts: options.maxAttempts ?? 3,
+    batchSize: options.batchSize ?? 1,
     concurrency: options.concurrency ?? 1,
     maxAgeHours: options.maxAgeHours ?? 48,
     retryDelaysMs: [30, 30],
@@ -611,5 +638,253 @@ describe("Summarizer", () => {
     await waitFor(async () => (await statusOf("kept")) === "done");
     await stopAll();
     expect(provider.calls).toHaveLength(2);
+  });
+
+  describe("batching", () => {
+    /** Adds changes c1..cN, c1 being the newest. */
+    async function addChanges(count: number): Promise<string[]> {
+      const ids = Array.from({ length: count }, (_unused, index) => `c${index + 1}`);
+      for (const [index, id] of ids.entries()) {
+        await addPendingChange(id, index + 1);
+      }
+      return ids;
+    }
+
+    const allDone = (ids: string[]) => async () =>
+      (await Promise.all(ids.map(statusOf))).every((status) => status === "done");
+
+    it("summarises several changes with one LLM call", async () => {
+      const ids = await addChanges(5);
+      const provider = new FakeProvider();
+      provider.respond = answer();
+      startSummarizer(provider, { batchSize: 5 });
+
+      await waitFor(allDone(ids));
+      await stopAll();
+
+      expect(provider.calls).toHaveLength(1);
+      expect(await llmCallsToday()).toBe(1);
+      const [call] = provider.calls;
+      expect(call?.system).toBe(BATCH_SYSTEM_PROMPT);
+      for (const id of ids) {
+        expect(call?.user).toContain(`${id} changed: tagline`);
+        // Each change got the summary written for its own id, not a neighbour's.
+        const change = await changeOf(id);
+        expect(change).toMatchObject({
+          summary: `Summary for change ${change.id}.`,
+          summarySource: "llm",
+          summaryAttempts: 1,
+        });
+      }
+    });
+
+    it("does not wait for a batch to fill up", async () => {
+      const [id = ""] = await addChanges(1);
+      const provider = new FakeProvider();
+      provider.respond = answer();
+      startSummarizer(provider, { batchSize: 10 });
+
+      await waitFor(allDone([id]));
+      await stopAll();
+
+      // A lone change is sent in the plain single-change form.
+      expect(provider.calls).toHaveLength(1);
+      expect(provider.calls[0]?.system).toBe(SYSTEM_PROMPT);
+      expect((await changeOf(id)).summary).toBe("Summarised on its own.");
+    });
+
+    it("works through a backlog in batches, newest changes first", async () => {
+      const ids = await addChanges(7);
+      const provider = new FakeProvider();
+      provider.respond = answer();
+      startSummarizer(provider, { batchSize: 3 });
+
+      await waitFor(allDone(ids));
+      await stopAll();
+
+      const sizes = provider.calls.map((call) => (isBatch(call) ? idsIn(call.user).length : 1));
+      expect(sizes).toEqual([3, 3, 1]);
+      expect(await llmCallsToday()).toBe(3);
+      const newestThree = await Promise.all(["c1", "c2", "c3"].map(async (id) => (await changeOf(id)).id));
+      expect(idsIn(provider.calls[0]?.user ?? "")).toEqual(newestThree);
+    });
+
+    it("keeps the good entries of an answer and retries the bad ones on their own", async () => {
+      const ids = await addChanges(5);
+      const leftOut = (await changeOf("c2")).id;
+      const empty = (await changeOf("c4")).id;
+      const provider = new FakeProvider();
+      provider.respond = answer((entries) => ({
+        summaries: entries
+          .filter((entry) => entry.id !== leftOut)
+          .map((entry) => (entry.id === empty ? { ...entry, summary: "  " } : entry)),
+      }));
+      startSummarizer(provider, { batchSize: 5 });
+
+      // After the batch: three have summaries, two are waiting with the reason.
+      await waitFor(async () => (await statusOf("c5")) === "done");
+      for (const id of ["c1", "c3", "c5"]) {
+        expect(await changeOf(id)).toMatchObject({ summaryStatus: "done", summaryAttempts: 1 });
+      }
+
+      await waitFor(allDone(ids));
+      await stopAll();
+
+      // One batch call, then one single-change call for each of the two bad entries.
+      expect(provider.calls.map(isBatch)).toEqual([true, false, false]);
+      expect(await llmCallsToday()).toBe(3);
+      for (const id of ["c2", "c4"]) {
+        expect(await changeOf(id)).toMatchObject({
+          summary: "Summarised on its own.",
+          summaryAttempts: 2,
+          summaryError: null,
+        });
+      }
+    });
+
+    it("falls back to one call per change when the batch answer is not the requested JSON", async () => {
+      const ids = await addChanges(4);
+      const provider = new FakeProvider();
+      provider.respond = (request) =>
+        isBatch(request) ? "Sure! Here are the four summaries you asked for..." : "On its own.";
+      startSummarizer(provider, { batchSize: 4 });
+
+      await waitFor(allDone(ids));
+      await stopAll();
+
+      expect(provider.calls.map(isBatch)).toEqual([true, false, false, false, false]);
+      for (const id of ids) {
+        expect(await changeOf(id)).toMatchObject({ summary: "On its own.", summaryAttempts: 2 });
+      }
+    });
+
+    it("retries as a batch when the call itself failed", async () => {
+      const ids = await addChanges(4);
+      const provider = new FakeProvider();
+      const respond = answer();
+      provider.respond = (request, call) => {
+        if (call === 1) {
+          throw new LlmError("http", "The LLM answered with HTTP 503");
+        }
+        return respond(request);
+      };
+      startSummarizer(provider, { batchSize: 4 });
+
+      await waitFor(async () => (await changeOf("c4")).summaryError === "llm_error");
+      await waitFor(allDone(ids));
+      await stopAll();
+
+      // A failed call says nothing against the batch, so it stays one call: two in total.
+      expect(provider.calls.map(isBatch)).toEqual([true, true]);
+      expect(await llmCallsToday()).toBe(2);
+      for (const id of ids) {
+        expect((await changeOf(id)).summaryAttempts).toBe(2);
+      }
+    });
+
+    it("counts a batch as one call against the daily cap", async () => {
+      await addChanges(9);
+      const provider = new FakeProvider();
+      provider.respond = answer();
+      startSummarizer(provider, { batchSize: 3, dailyCap: 2 });
+
+      await waitFor(async () => (await changeOf("c9")).summaryError === "daily_cap_reached");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await stopAll();
+
+      // Two calls bought six summaries. Without batching the same cap buys two.
+      expect(provider.calls).toHaveLength(2);
+      expect(await llmCallsToday()).toBe(2);
+      const statuses = await Promise.all(
+        ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"].map(statusOf),
+      );
+      expect(statuses.filter((status) => status === "done")).toHaveLength(6);
+      for (const id of ["c7", "c8", "c9"]) {
+        expect(await changeOf(id)).toMatchObject({
+          summaryStatus: "pending",
+          summaryError: "daily_cap_reached",
+          summaryAttempts: 0,
+        });
+      }
+    });
+
+    it("gives up on a change that the model keeps getting wrong, without holding back the rest", async () => {
+      const ids = await addChanges(4);
+      const cursed = (await changeOf("c3")).id;
+      const provider = new FakeProvider();
+      const respond = answer((entries) => ({
+        summaries: entries.filter((entry) => entry.id !== cursed),
+      }));
+      // Left out of the batch, and an empty answer every time it is asked on its own.
+      provider.respond = (request) => (isBatch(request) ? respond(request) : " ");
+      startSummarizer(provider, { batchSize: 4 });
+
+      await waitFor(async () => (await statusOf("c3")) === "failed");
+      await stopAll();
+
+      expect(await changeOf("c3")).toMatchObject({
+        summaryError: "llm_invalid_response",
+        summaryAttempts: 3,
+      });
+      for (const id of ids.filter((id) => id !== "c3")) {
+        expect(await changeOf(id)).toMatchObject({ summaryStatus: "done", summaryAttempts: 1 });
+      }
+      expect(provider.calls.map(isBatch)).toEqual([true, false, false]);
+    });
+
+    it("allows a batch more time than a single change", async () => {
+      await addChanges(5);
+      const provider = new FakeProvider();
+      let abortedAfterMs = 0;
+      provider.respond = (request) => {
+        const startedAt = Date.now();
+        request.signal.addEventListener("abort", () => {
+          abortedAfterMs = Date.now() - startedAt;
+        });
+        return hang(request);
+      };
+      // Base timeout 100 ms; five changes get 100 * (1 + 4/4) = 200 ms.
+      startSummarizer(provider, { batchSize: 5, timeoutMs: 100, maxAttempts: 1 });
+
+      await waitFor(async () => (await statusOf("c1")) === "failed");
+      await stopAll();
+      expect(abortedAfterMs).toBeGreaterThanOrEqual(190);
+      expect(abortedAfterMs).toBeLessThan(400);
+    });
+
+    it("puts the whole batch back when the worker shuts down in the middle of a call", async () => {
+      const ids = await addChanges(4);
+      const provider = new FakeProvider();
+      provider.respond = hang;
+      startSummarizer(provider, { batchSize: 4, timeoutMs: 5000 });
+
+      await waitFor(() => provider.calls.length === 1);
+      await stopAll();
+
+      for (const id of ids) {
+        expect(await changeOf(id)).toMatchObject({ summaryStatus: "pending", summaryAttempts: 0 });
+      }
+    });
+
+    it("has several workers take different batches", async () => {
+      const ids = await addChanges(12);
+      const provider = new FakeProvider();
+      const respond = answer();
+      provider.respond = async (request) => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return respond(request);
+      };
+      const { logger, errors } = captureErrors();
+      startSummarizer(provider, { batchSize: 4, concurrency: 3, logger });
+
+      await waitFor(allDone(ids));
+      await stopAll();
+
+      expect(errors).toEqual([]);
+      // Every change was sent exactly once, across the three calls.
+      const sent = provider.calls.flatMap((call) => idsIn(call.user));
+      expect(sent).toHaveLength(12);
+      expect(new Set(sent).size).toBe(12);
+    });
   });
 });

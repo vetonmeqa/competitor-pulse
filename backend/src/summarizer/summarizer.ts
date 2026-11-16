@@ -3,7 +3,15 @@ import { pause } from "../util/pause.js";
 import { type LlmBudget, nextUtcMidnight } from "./budget.js";
 import type { CircuitBreaker, CircuitBreakerStatus } from "./circuit-breaker.js";
 import { LlmError, type LlmProvider, toSummaryError } from "./llm-provider.js";
-import { buildUserPrompt, type SummaryJob, SYSTEM_PROMPT, validateSummary } from "./prompt.js";
+import {
+  BATCH_SYSTEM_PROMPT,
+  buildBatchUserPrompt,
+  buildUserPrompt,
+  parseBatchSummaries,
+  type SummaryJob,
+  SYSTEM_PROMPT,
+  validateSummary,
+} from "./prompt.js";
 import type { SummaryStore } from "./summary-store.js";
 
 export interface SummarizerOptions {
@@ -12,8 +20,10 @@ export interface SummarizerOptions {
   budget: LlmBudget;
   breaker: CircuitBreaker;
   log: Logger;
-  /** Budget for one LLM call. */
+  /** Budget for an LLM call that summarises one change. A batch gets more: see `timeoutFor`. */
   timeoutMs: number;
+  /** Changes summarised per LLM call. 1 turns batching off. */
+  batchSize?: number;
   /** Attempts per summary before giving up. */
   maxAttempts: number;
   /** LLM calls that may run at once. */
@@ -50,6 +60,11 @@ const LEASE_MARGIN_SECONDS = 30;
  *
  * A failed attempt is retried later with a growing delay, and given up after
  * `maxAttempts`. Either way the snapshot keeps its field-by-field changes.
+ *
+ * With a batch size above 1, one call summarises several changes. The cap counts calls,
+ * so this stretches it. Nothing waits for a batch to fill: a call takes whatever is
+ * pending at that moment, up to the batch size. Each change in the answer is judged on
+ * its own, so one unusable entry costs only that change a retry.
  */
 export class Summarizer {
   private readonly store: SummaryStore;
@@ -59,6 +74,7 @@ export class Summarizer {
   private readonly log: Logger;
   private readonly timeoutMs: number;
   private readonly maxAttempts: number;
+  private readonly batchSize: number;
   private readonly concurrency: number;
   private readonly maxAgeHours: number;
   private readonly retryDelaysMs: number[];
@@ -84,11 +100,12 @@ export class Summarizer {
     this.log = options.log;
     this.timeoutMs = options.timeoutMs;
     this.maxAttempts = options.maxAttempts;
+    this.batchSize = options.batchSize ?? 1;
     this.concurrency = options.concurrency;
     this.maxAgeHours = options.maxAgeHours;
     this.retryDelaysMs = options.retryDelaysMs ?? [15_000, 60_000];
     this.idleMs = options.idleMs ?? 1000;
-    this.leaseSeconds = Math.ceil(options.timeoutMs / 1000) + LEASE_MARGIN_SECONDS;
+    this.leaseSeconds = Math.ceil(this.timeoutFor(this.batchSize) / 1000) + LEASE_MARGIN_SECONDS;
   }
 
   /** Runs until `signal` aborts. Calls in flight are aborted and their jobs put back. */
@@ -126,7 +143,7 @@ export class Summarizer {
     }
   }
 
-  /** Handles at most one pending summary. Returns false when there was nothing to do. */
+  /** Makes at most one LLM call. Returns false when there was nothing to do. */
   private async processNext(shutdown: AbortSignal): Promise<boolean> {
     if (!this.breaker.tryAcquire()) {
       await this.store.flagLlmUnavailable();
@@ -134,16 +151,17 @@ export class Summarizer {
       return false;
     }
 
-    let job: SummaryJob | undefined;
+    let jobs: SummaryJob[];
     try {
-      [job] = await this.store.claim(1, this.leaseSeconds);
-      if (job === undefined) {
+      jobs = await this.store.claim(this.batchSize, this.leaseSeconds);
+      if (jobs.length === 0) {
         this.breaker.release();
         return false;
       }
+      // One reservation per call, however many changes the call carries.
       if (!(await this.budget.tryReserve())) {
         this.breaker.release();
-        await this.deferForCap(job);
+        await this.deferForCap(jobs);
         return false;
       }
     } catch (error) {
@@ -151,63 +169,96 @@ export class Summarizer {
       throw error;
     }
 
-    await this.summarise(job, shutdown);
+    await this.callLlm(jobs, shutdown);
     return true;
   }
 
-  private async summarise(job: SummaryJob, shutdown: AbortSignal): Promise<void> {
-    let summary: string;
+  private async callLlm(jobs: SummaryJob[], shutdown: AbortSignal): Promise<void> {
+    const [first] = jobs;
+    if (first === undefined) {
+      return;
+    }
+    const isBatch = jobs.length > 1;
+
+    let text: string;
     try {
-      const text = await this.provider.complete({
-        system: SYSTEM_PROMPT,
-        user: buildUserPrompt(job),
-        signal: AbortSignal.any([shutdown, AbortSignal.timeout(this.timeoutMs)]),
+      text = await this.provider.complete({
+        system: isBatch ? BATCH_SYSTEM_PROMPT : SYSTEM_PROMPT,
+        user: isBatch ? buildBatchUserPrompt(jobs) : buildUserPrompt(first),
+        signal: AbortSignal.any([shutdown, AbortSignal.timeout(this.timeoutFor(jobs.length))]),
       });
-      summary = validateSummary(text);
     } catch (error) {
-      await this.handleFailure(job, error, shutdown);
+      await this.handleCallFailure(jobs, error, shutdown);
       return;
     }
 
-    this.breaker.onSuccess();
-    await this.store.saveSummary(job.snapshotId, summary);
-    this.counts.done += 1;
-    this.log.info(
-      { snapshotId: job.snapshotId, competitorId: job.competitorId, attempt: job.attempt },
-      "summary written",
-    );
+    // The LLM answered. Now judge the answer, per change.
+    let results: Map<number, string | LlmError>;
+    try {
+      results = isBatch
+        ? parseBatchSummaries(text, jobs)
+        : new Map([[first.snapshotId, validateSummary(text)]]);
+    } catch (error) {
+      // Nothing in the answer is usable.
+      const unusable = asLlmError(error);
+      results = new Map(jobs.map((job) => [job.snapshotId, unusable]));
+    }
 
+    let written = 0;
+    for (const job of jobs) {
+      const result = results.get(job.snapshotId);
+      if (typeof result === "string") {
+        await this.store.saveSummary(job.snapshotId, result);
+        written += 1;
+      } else {
+        await this.recordFailedAttempt(job, result ?? asLlmError(undefined));
+      }
+    }
+    // At least one usable summary means the LLM is working.
+    if (written === 0) {
+      this.breaker.onFailure();
+      return;
+    }
+    this.breaker.onSuccess();
+    this.counts.done += written;
+    this.log.info(
+      { snapshotIds: jobs.map((job) => job.snapshotId), written, requested: jobs.length },
+      isBatch ? "batch of summaries written" : "summary written",
+    );
     if (this.flaggedUnavailable) {
       this.flaggedUnavailable = false;
       await this.store.clearLlmUnavailable();
     }
   }
 
-  private async handleFailure(
-    job: SummaryJob,
+  /** The call itself failed: no answer, an error status, or a timeout. */
+  private async handleCallFailure(
+    jobs: SummaryJob[],
     error: unknown,
     shutdown: AbortSignal,
   ): Promise<void> {
     if (shutdown.aborted) {
-      // We cut the call short ourselves. That says nothing about the LLM or the job.
+      // We cut the call short ourselves. That says nothing about the LLM or the jobs.
       this.breaker.release();
-      await this.store.release(job.snapshotId);
+      await this.store.release(jobs.map((job) => job.snapshotId));
       return;
     }
-
-    const llmError =
-      error instanceof LlmError
-        ? error
-        : new LlmError("unreachable", "The LLM call failed unexpectedly", { cause: error });
     this.breaker.onFailure();
+    const llmError = asLlmError(error);
+    for (const job of jobs) {
+      await this.recordFailedAttempt(job, llmError);
+    }
+  }
 
-    const reason = toSummaryError(llmError);
+  /** Schedules another attempt for one change, or gives up on it after `maxAttempts`. */
+  private async recordFailedAttempt(job: SummaryJob, error: LlmError): Promise<void> {
+    const reason = toSummaryError(error);
     const details = {
       snapshotId: job.snapshotId,
       competitorId: job.competitorId,
       attempt: job.attempt,
       reason,
-      detail: llmError.message,
+      detail: error.message,
     };
 
     if (job.attempt >= this.maxAttempts) {
@@ -223,17 +274,28 @@ export class Summarizer {
     this.log.warn({ ...details, retryInMs: delayMs }, "summary attempt failed, will retry");
   }
 
-  private async deferForCap(job: SummaryJob): Promise<void> {
+  private async deferForCap(jobs: SummaryJob[]): Promise<void> {
     const now = new Date();
     const resetsAt = nextUtcMidnight(now);
-    await this.store.deferForCap(job.snapshotId, resetsAt);
-    this.counts.deferredForCap += 1;
+    await this.store.deferForCap(
+      jobs.map((job) => job.snapshotId),
+      resetsAt,
+    );
+    this.counts.deferredForCap += jobs.length;
 
     const today = now.toISOString().slice(0, 10);
     if (this.capLoggedFor !== today) {
       this.capLoggedFor = today;
       this.log.warn({ resetsAt }, "daily LLM cap reached, summaries wait until it resets");
     }
+  }
+
+  /**
+   * A batch produces more text than a single summary, so it gets more time: a quarter of
+   * the base timeout for every change beyond the first.
+   */
+  private timeoutFor(changes: number): number {
+    return Math.round(this.timeoutMs * (1 + (changes - 1) / 4));
   }
 
   private async expireOldJobs(signal: AbortSignal): Promise<void> {
@@ -249,4 +311,10 @@ export class Summarizer {
       await pause(EXPIRY_CHECK_INTERVAL_MS, signal);
     }
   }
+}
+
+function asLlmError(error: unknown): LlmError {
+  return error instanceof LlmError
+    ? error
+    : new LlmError("unreachable", "The LLM call failed unexpectedly", { cause: error });
 }

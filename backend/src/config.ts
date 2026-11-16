@@ -31,6 +31,9 @@ const schema = z.object({
   LLM_DAILY_CAP: z.coerce.number().int().nonnegative().default(2000),
   LLM_MAX_ATTEMPTS: positiveInt.default(3),
   LLM_CONCURRENCY: positiveInt.default(2),
+  // Changes summarised per LLM call. The cap counts calls, so batching stretches it.
+  // Leave at 1 for the mock LLM, which cannot answer a batch.
+  LLM_BATCH_SIZE: z.coerce.number().int().min(1).max(20).default(1),
   // A change nobody summarised within this window is no longer worth an LLM call.
   SUMMARY_MAX_AGE_HOURS: positiveInt.default(48),
 

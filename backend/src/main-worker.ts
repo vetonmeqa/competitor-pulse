@@ -67,6 +67,7 @@ if (lock !== null) {
     log,
     timeoutMs: config.LLM_TIMEOUT_MS,
     maxAttempts: config.LLM_MAX_ATTEMPTS,
+    batchSize: config.LLM_BATCH_SIZE,
     concurrency: config.LLM_CONCURRENCY,
     maxAgeHours: config.SUMMARY_MAX_AGE_HOURS,
   });
@@ -78,6 +79,7 @@ if (lock !== null) {
       rateLimitPerSecond: config.SOURCE_RATE_LIMIT_PER_SEC,
       llm: summarizer.status().provider,
       llmDailyCap: config.LLM_DAILY_CAP,
+      llmBatchSize: config.LLM_BATCH_SIZE,
     },
     "worker started",
   );

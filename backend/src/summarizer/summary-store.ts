@@ -1,4 +1,17 @@
-import { and, desc, eq, inArray, isNull, lt, lte, notInArray, or, type SQL, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  ne,
+  notInArray,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "../db/client.js";
 import { listingVersions, snapshots } from "../db/schema.js";
@@ -6,6 +19,9 @@ import type { SummaryError } from "../domain/summary.js";
 import type { SummaryJob } from "./prompt.js";
 
 const isPending = eq(snapshots.summaryStatus, "pending");
+const isDue = and(isPending, lte(snapshots.summaryNextAttemptAt, sql`now()`));
+/** The LLM's last answer for this change was unusable, so it is retried on its own. */
+const RETRY_ALONE: SummaryError = "llm_invalid_response";
 
 /**
  * The summary queue. There is no separate queue table: a snapshot whose summary is
@@ -19,25 +35,47 @@ export class SummaryStore {
   }
 
   /**
-   * Takes up to `limit` pending summaries that are due, newest change first, because a
-   * fresh change is worth more than an old one when the budget is short.
+   * Takes the pending summaries for one LLM call: a single change, or a batch of up to
+   * `maxBatchSize`. Newest change first, because a fresh change is worth more than an
+   * old one when the budget is short.
+   *
+   * A change whose last answer was unusable is always returned alone. In a batch, one
+   * confusing item could keep spoiling the answers for the others; alone, it is sent in
+   * the simpler single-change form.
    *
    * Claiming counts as an attempt and pushes the next attempt `leaseSeconds` ahead. If
-   * the worker dies mid-call, the job simply becomes due again when the lease runs out.
+   * the worker dies mid-call, the jobs simply become due again when the lease runs out.
    */
-  async claim(limit: number, leaseSeconds: number): Promise<SummaryJob[]> {
+  async claim(maxBatchSize: number, leaseSeconds: number): Promise<SummaryJob[]> {
     return this.db.transaction(async (tx) => {
-      const due = await tx
-        .select({ id: snapshots.id })
+      const [newest] = await tx
+        .select({ id: snapshots.id, lastError: snapshots.summaryError })
         .from(snapshots)
-        .where(and(isPending, lte(snapshots.summaryNextAttemptAt, sql`now()`)))
+        .where(isDue)
         .orderBy(desc(snapshots.fetchedAt))
-        .limit(limit)
+        .limit(1)
         .for("update", { skipLocked: true });
-      if (due.length === 0) {
+      if (!newest) {
         return [];
       }
-      const ids = due.map((row) => row.id);
+      const ids = [newest.id];
+
+      if (maxBatchSize > 1 && newest.lastError !== RETRY_ALONE) {
+        const more = await tx
+          .select({ id: snapshots.id })
+          .from(snapshots)
+          .where(
+            and(
+              isDue,
+              ne(snapshots.id, newest.id),
+              or(isNull(snapshots.summaryError), ne(snapshots.summaryError, RETRY_ALONE)),
+            ),
+          )
+          .orderBy(desc(snapshots.fetchedAt))
+          .limit(maxBatchSize - 1)
+          .for("update", { skipLocked: true });
+        ids.push(...more.map((row) => row.id));
+      }
 
       await tx
         .update(snapshots)
@@ -113,21 +151,21 @@ export class SummaryStore {
   }
 
   /** Undoes a claim whose LLM call was never completed, e.g. because of a shutdown. */
-  async release(snapshotId: number): Promise<void> {
+  async release(snapshotIds: number[]): Promise<void> {
     await this.db
       .update(snapshots)
       .set({
         summaryAttempts: sql`greatest(${snapshots.summaryAttempts} - 1, 0)`,
         summaryNextAttemptAt: sql`now()`,
       })
-      .where(and(eq(snapshots.id, snapshotId), isPending));
+      .where(and(inArray(snapshots.id, snapshotIds), isPending));
   }
 
   /**
    * The daily cap is reached. Undoes the claim (no call was made) and parks every pending
    * summary until the budget resets, with a reason the user can see.
    */
-  async deferForCap(claimedSnapshotId: number, until: Date): Promise<void> {
+  async deferForCap(claimedSnapshotIds: number[], until: Date): Promise<void> {
     await this.db
       .update(snapshots)
       .set({
@@ -135,7 +173,7 @@ export class SummaryStore {
         summaryError: "daily_cap_reached",
         summaryNextAttemptAt: until,
       })
-      .where(and(eq(snapshots.id, claimedSnapshotId), isPending));
+      .where(and(inArray(snapshots.id, claimedSnapshotIds), isPending));
     await this.db
       .update(snapshots)
       .set({ summaryError: "daily_cap_reached", summaryNextAttemptAt: until })
