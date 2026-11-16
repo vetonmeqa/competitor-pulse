@@ -7,6 +7,11 @@ import { Poller } from "./poller/poller.js";
 import { AdaptiveRateLimiter } from "./poller/rate-limiter.js";
 import { runRetention } from "./poller/retention.js";
 import { HttpListingSource } from "./source/http-listing-source.js";
+import { LlmBudget } from "./summarizer/budget.js";
+import { CircuitBreaker } from "./summarizer/circuit-breaker.js";
+import { createProvider } from "./summarizer/create-provider.js";
+import { Summarizer } from "./summarizer/summarizer.js";
+import { SummaryStore } from "./summarizer/summary-store.js";
 import { pause } from "./util/pause.js";
 import { type WorkerReport, writeWorkerReport } from "./worker-status.js";
 
@@ -54,20 +59,35 @@ if (lock !== null) {
     pollIntervalSeconds: config.POLL_INTERVAL_SECONDS,
     maxInFlight: config.POLL_MAX_IN_FLIGHT,
   });
+  const summarizer = new Summarizer({
+    store: new SummaryStore(db),
+    provider: createProvider(config),
+    budget: new LlmBudget(db, config.LLM_DAILY_CAP),
+    breaker: new CircuitBreaker(),
+    log,
+    timeoutMs: config.LLM_TIMEOUT_MS,
+    maxAttempts: config.LLM_MAX_ATTEMPTS,
+    concurrency: config.LLM_CONCURRENCY,
+    maxAgeHours: config.SUMMARY_MAX_AGE_HOURS,
+  });
 
   log.info(
     {
       source: config.SOURCE_BASE_URL,
       pollIntervalSeconds: config.POLL_INTERVAL_SECONDS,
       rateLimitPerSecond: config.SOURCE_RATE_LIMIT_PER_SEC,
+      llm: summarizer.status().provider,
+      llmDailyCap: config.LLM_DAILY_CAP,
     },
     "worker started",
   );
 
+  // Polling and summarising are independent loops: a slow or failing LLM cannot delay a poll.
   await Promise.all([
     poller.run(shutdown.signal),
+    summarizer.run(shutdown.signal),
     runRetention(store, config.RETENTION_DAYS, log, shutdown.signal),
-    reportStatus(poller, shutdown.signal),
+    reportStatus(poller, summarizer, shutdown.signal),
   ]);
 
   await lock.release();
@@ -80,9 +100,17 @@ log.info("worker stopped");
  * Publishes the worker's live numbers to the database, where the API reads them. It also
  * works as a heartbeat: when the reports stop, the API shows the worker as not running.
  */
-async function reportStatus(poller: Poller, signal: AbortSignal): Promise<void> {
+async function reportStatus(
+  poller: Poller,
+  summarizer: Summarizer,
+  signal: AbortSignal,
+): Promise<void> {
   for (let reports = 1; !signal.aborted; reports++) {
-    const report: WorkerReport = { startedAt, poller: poller.status() };
+    const report: WorkerReport = {
+      startedAt,
+      poller: poller.status(),
+      summarizer: summarizer.status(),
+    };
     try {
       await writeWorkerReport(db, report);
     } catch (error) {

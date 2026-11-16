@@ -2,6 +2,10 @@ import { z } from "zod";
 
 const positiveInt = z.coerce.number().int().positive();
 
+/** An optional setting. An empty value (as Docker Compose passes for an unset variable) counts as unset. */
+const optional = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
+
 const schema = z.object({
   DATABASE_URL: z.string().min(1).default("postgres://pulse:pulse@localhost:5432/pulse"),
   PORT: positiveInt.default(3000),
@@ -16,10 +20,13 @@ const schema = z.object({
   POLL_INTERVAL_SECONDS: positiveInt.default(900),
   POLL_MAX_IN_FLIGHT: positiveInt.default(50),
 
-  // LLM (any OpenAI Chat Completions compatible endpoint).
-  LLM_BASE_URL: z.url().default("http://localhost:4001/v1"),
-  LLM_API_KEY: z.string().default("mock"),
-  LLM_MODEL: z.string().default("mock-llm"),
+  // LLM. `openai-compatible` covers the mock LLM, OpenAI, Ollama and similar endpoints;
+  // `anthropic` uses the Anthropic SDK. Base URL, key and model fall back to defaults that
+  // depend on the provider (see src/summarizer/create-provider.ts).
+  LLM_PROVIDER: z.enum(["openai-compatible", "anthropic"]).default("openai-compatible"),
+  LLM_BASE_URL: optional(z.url()),
+  LLM_API_KEY: optional(z.string()),
+  LLM_MODEL: optional(z.string()),
   LLM_TIMEOUT_MS: positiveInt.default(15_000),
   LLM_DAILY_CAP: z.coerce.number().int().nonnegative().default(2000),
   LLM_MAX_ATTEMPTS: positiveInt.default(3),

@@ -25,6 +25,22 @@ export const workerReportSchema = z.object({
       rateLimitedCount: z.number(),
     }),
   }),
+  summarizer: z.object({
+    provider: z.string(),
+    /** Whether LLM calls are flowing (`closed`) or paused because the LLM is failing. */
+    breaker: z.object({
+      state: z.enum(["closed", "open", "half_open"]),
+      consecutiveFailures: z.number(),
+      retryInMs: z.number(),
+    }),
+    /** Summaries since the worker started, by outcome. */
+    summaries: z.object({
+      done: z.number(),
+      retried: z.number(),
+      failed: z.number(),
+      deferredForCap: z.number(),
+    }),
+  }),
 });
 
 export type WorkerReport = z.infer<typeof workerReportSchema>;

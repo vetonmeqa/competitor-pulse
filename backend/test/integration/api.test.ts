@@ -372,6 +372,11 @@ describe("GET /api/status", () => {
         rateLimitedCount: 4,
       },
     },
+    summarizer: {
+      provider: "openai-compatible (mock-llm)",
+      breaker: { state: "closed", consecutiveFailures: 0, retryInMs: 0 },
+      summaries: { done: 12, retried: 2, failed: 1, deferredForCap: 0 },
+    },
   };
 
   it("reports an idle system before anything has run", async () => {
