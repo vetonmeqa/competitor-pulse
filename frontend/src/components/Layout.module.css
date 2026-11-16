@@ -1,0 +1,70 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  /* Fills the screen so the footer sits at the bottom on a short page. */
+  min-height: 100dvh;
+}
+
+.header {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.inner {
+  max-width: var(--page-width);
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.brand:hover {
+  color: var(--text);
+}
+
+.logo {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--accent);
+}
+
+.main {
+  flex: 1;
+  display: grid;
+  /*
+   * minmax(0, 1fr) lets the column shrink to the screen. A plain grid column refuses to
+   * be narrower than its widest content, and a text input alone is about 230px.
+   */
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: var(--page-width);
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+}
+
+/* Hidden until focused with the keyboard, then the first thing on the page. */
+.skip {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 1;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-small);
+  background: var(--accent);
+  color: var(--on-accent);
+  transform: translateY(-200%);
+}
+
+.skip:focus {
+  color: var(--on-accent);
+  transform: none;
+}

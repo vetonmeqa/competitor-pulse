@@ -1,0 +1,37 @@
+.footer {
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.inner {
+  max-width: var(--page-width);
+  margin: 0 auto;
+  padding: var(--space-4);
+}
+
+.items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+}
+
+.item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* A statement with a tone is one worth noticing, so it takes that tone's text colour. */
+.item[data-tone] {
+  color: var(--tone-fg);
+}
+
+.dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentcolor;
+  transform: translateY(-1px);
+}
