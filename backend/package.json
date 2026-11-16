@@ -17,7 +17,8 @@
     "db:migrate:prod": "node dist/db/migrate.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",
