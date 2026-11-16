@@ -1,5 +1,46 @@
 name: competitor-pulse
 
+# `docker compose up` starts the whole system. Then open http://localhost:8080.
+#
+# Every ${VARIABLE:-default} below can be set in a .env file next to this file, or in the
+# shell. See .env.example. To use your own data source or LLM, set SOURCE_BASE_URL or
+# LLM_BASE_URL; the bundled listing-source and mock-llm are only the defaults.
+
+# Shared by the three backend services, which run the same image with different commands.
+x-backend: &backend
+  build: ./backend
+  image: competitor-pulse-backend
+  environment:
+    DATABASE_URL: postgres://pulse:pulse@db:5432/pulse
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+
+    # Data source
+    SOURCE_BASE_URL: ${SOURCE_BASE_URL:-http://listing-source:4002}
+    SOURCE_RATE_LIMIT_PER_SEC: ${SOURCE_RATE_LIMIT_PER_SEC:-5}
+    SOURCE_TIMEOUT_MS: ${SOURCE_TIMEOUT_MS:-10000}
+
+    # Scheduler. Production would use 900 (15 minutes). The default here is short so
+    # that changes show up quickly when trying the system out.
+    POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+
+    # LLM. An empty value means "use the provider's default".
+    LLM_PROVIDER: ${LLM_PROVIDER:-openai-compatible}
+    LLM_BASE_URL: ${LLM_BASE_URL:-http://mock-llm:4001/v1}
+    LLM_API_KEY: ${LLM_API_KEY:-}
+    LLM_MODEL: ${LLM_MODEL:-}
+    LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-15000}
+    LLM_DAILY_CAP: ${LLM_DAILY_CAP:-2000}
+    LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+    LLM_CONCURRENCY: ${LLM_CONCURRENCY:-2}
+    LLM_BATCH_SIZE: ${LLM_BATCH_SIZE:-1}
+    SUMMARY_MAX_AGE_HOURS: ${SUMMARY_MAX_AGE_HOURS:-48}
+
+    RETENTION_DAYS: ${RETENTION_DAYS:-90}
+  # Lets a container reach a service running on the host machine, on Linux too, e.g.
+  # SOURCE_BASE_URL=http://host.docker.internal:4002
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
 services:
   db:
     image: postgres:16-alpine
@@ -17,6 +58,55 @@ services:
       timeout: 3s
       retries: 30
 
+  # Applies the database migrations once, then exits. The api and the worker wait for it.
+  migrate:
+    <<: *backend
+    command: ["node", "dist/db/migrate.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *backend
+    command: ["node", "dist/main-api.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${API_PORT:-3000}:3000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Polls the source and writes the summaries. Run exactly one: the rate limiter lives in
+  # its memory. A second copy would wait as a standby (see backend/src/db/worker-lock.ts).
+  worker:
+    <<: *backend
+    command: ["node", "dist/main-worker.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # The React app, served by nginx, which also forwards /api to the api service.
+  web:
+    build: ./frontend
+    image: competitor-pulse-web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+
   # The provided data source, run unchanged from files/.
   listing-source:
     image: node:22-alpine
@@ -25,7 +115,7 @@ services:
       - ./files/listing-source:/app:ro
     command: ["node", "listing-source-server.mjs"]
     ports:
-      - "4002:4002"
+      - "${SOURCE_PORT:-4002}:4002"
     healthcheck:
       test:
         - CMD
@@ -45,7 +135,7 @@ services:
       - ./files/mock-llm:/app:ro
     command: ["python3", "/app/mock-llm-server.py"]
     ports:
-      - "4001:4001"
+      - "${MOCK_LLM_PORT:-4001}:4001"
     healthcheck:
       test:
         - CMD
