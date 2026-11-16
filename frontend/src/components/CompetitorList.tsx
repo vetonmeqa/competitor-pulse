@@ -4,6 +4,7 @@ import type { Competitor } from "../api/types";
 import { competitorState } from "../lib/labels";
 import { Badge } from "./Badge";
 import styles from "./CompetitorList.module.css";
+import { CopyButton } from "./CopyButton";
 import { Notice } from "./Notice";
 import { Timestamp } from "./Timestamp";
 
@@ -35,12 +36,15 @@ export function CompetitorList({ competitors }: CompetitorListProps) {
           return (
             <li key={competitor.id} className={styles.item}>
               <div className={styles.identity}>
-                <Link
-                  className={styles.id}
-                  to={`/competitors/${encodeURIComponent(competitor.id)}`}
-                >
-                  {competitor.id}
-                </Link>
+                <div className={styles.idRow}>
+                  <Link
+                    className={styles.id}
+                    to={`/competitors/${encodeURIComponent(competitor.id)}`}
+                  >
+                    {competitor.id}
+                  </Link>
+                  <CopyButton value={competitor.id} label={competitor.id} />
+                </div>
                 {competitor.title !== null && (
                   <span className={styles.title}>{competitor.title}</span>
                 )}

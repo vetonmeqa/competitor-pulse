@@ -32,7 +32,16 @@
   min-width: 0;
 }
 
+/* The id and its copy button on one line. A long id wraps; the button stays beside it. */
+.idRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 .id {
+  min-width: 0;
   font-family: var(--font-mono);
   font-weight: 600;
   overflow-wrap: anywhere;

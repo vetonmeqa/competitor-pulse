@@ -29,6 +29,24 @@ describe("competitor list", () => {
     expect(within(orbit as HTMLElement).queryByText("Changed in last 24 h")).not.toBeInTheDocument();
   });
 
+  it("copies a competitor's id from its row", async () => {
+    const user = userEvent.setup();
+    mockApi({
+      "GET /status": status,
+      "GET /competitors": () => ({
+        body: [competitor({ id: "acme-crm" }), competitor({ id: "orbit-hr", title: "Orbit HR" })],
+      }),
+    });
+    renderApp("/");
+
+    await user.click(await screen.findByRole("button", { name: "Copy orbit-hr" }));
+
+    expect(await navigator.clipboard.readText()).toBe("orbit-hr");
+    expect(screen.getByText("Copied orbit-hr")).toBeInTheDocument();
+    // Copying does not navigate or remove anything.
+    expect(screen.getByRole("link", { name: "orbit-hr" })).toBeInTheDocument();
+  });
+
   it("says so when nothing is tracked", async () => {
     mockApi({ "GET /status": status, "GET /competitors": () => ({ body: [] }) });
     renderApp("/");
