@@ -24,9 +24,11 @@ export function createProvider(config: LlmConfig): LlmProvider {
         model: config.LLM_MODEL ?? MOCK_DEFAULTS.model,
       });
     case "anthropic":
+      // LLM_BASE_URL is deliberately not used here. It points at an OpenAI-compatible
+      // endpoint (in Docker, the mock LLM), and Claude requests must never go there by
+      // accident. The SDK uses the Anthropic API, or ANTHROPIC_BASE_URL if that is set.
       return new AnthropicProvider({
         apiKey: config.LLM_API_KEY,
-        baseUrl: config.LLM_BASE_URL,
         model: config.LLM_MODEL ?? DEFAULT_ANTHROPIC_MODEL,
       });
   }

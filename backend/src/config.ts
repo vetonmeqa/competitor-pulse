@@ -21,8 +21,9 @@ const schema = z.object({
   POLL_MAX_IN_FLIGHT: positiveInt.default(50),
 
   // LLM. `openai-compatible` covers the mock LLM, OpenAI, Ollama and similar endpoints;
-  // `anthropic` uses the Anthropic SDK. Base URL, key and model fall back to defaults that
-  // depend on the provider (see src/summarizer/create-provider.ts).
+  // `anthropic` uses the Anthropic SDK. Key and model fall back to defaults that depend on
+  // the provider (see src/summarizer/create-provider.ts). LLM_BASE_URL applies to
+  // `openai-compatible` only.
   LLM_PROVIDER: z.enum(["openai-compatible", "anthropic"]).default("openai-compatible"),
   LLM_BASE_URL: optional(z.url()),
   LLM_API_KEY: optional(z.string()),
