@@ -8,8 +8,13 @@ import { AdaptiveRateLimiter } from "./poller/rate-limiter.js";
 import { runRetention } from "./poller/retention.js";
 import { HttpListingSource } from "./source/http-listing-source.js";
 import { pause } from "./util/pause.js";
+import { type WorkerReport, writeWorkerReport } from "./worker-status.js";
 
-const STATUS_LOG_INTERVAL_MS = 60_000;
+const STATUS_REPORT_INTERVAL_MS = 10_000;
+/** Log the status once a minute, not on every report. */
+const REPORTS_PER_LOG_LINE = 6;
+
+const startedAt = new Date().toISOString();
 
 const config = loadConfig();
 const log = createLogger(config.LOG_LEVEL, "worker");
@@ -62,7 +67,7 @@ if (lock !== null) {
   await Promise.all([
     poller.run(shutdown.signal),
     runRetention(store, config.RETENTION_DAYS, log, shutdown.signal),
-    logStatus(poller, shutdown.signal),
+    reportStatus(poller, shutdown.signal),
   ]);
 
   await lock.release();
@@ -71,9 +76,21 @@ if (lock !== null) {
 await pool.end();
 log.info("worker stopped");
 
-async function logStatus(poller: Poller, signal: AbortSignal): Promise<void> {
-  while (!signal.aborted) {
-    await pause(STATUS_LOG_INTERVAL_MS, signal);
-    log.info(poller.status(), "status");
+/**
+ * Publishes the worker's live numbers to the database, where the API reads them. It also
+ * works as a heartbeat: when the reports stop, the API shows the worker as not running.
+ */
+async function reportStatus(poller: Poller, signal: AbortSignal): Promise<void> {
+  for (let reports = 1; !signal.aborted; reports++) {
+    const report: WorkerReport = { startedAt, poller: poller.status() };
+    try {
+      await writeWorkerReport(db, report);
+    } catch (error) {
+      log.warn({ err: error }, "could not write the worker status");
+    }
+    if (reports % REPORTS_PER_LOG_LINE === 0) {
+      log.info(report, "status");
+    }
+    await pause(STATUS_REPORT_INTERVAL_MS, signal);
   }
 }

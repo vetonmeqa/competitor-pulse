@@ -19,7 +19,7 @@ export function openTestDb() {
 
 export async function resetTables(db: Db): Promise<void> {
   await db.execute(
-    sql`TRUNCATE competitors, listing_versions, snapshots, llm_usage RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE competitors, listing_versions, snapshots, llm_usage, worker_status RESTART IDENTITY CASCADE`,
   );
 }
 

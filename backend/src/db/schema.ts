@@ -3,9 +3,11 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   date,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -134,6 +136,20 @@ export const llmUsage = pgTable("llm_usage", {
   day: date("day", { mode: "string" }).primaryKey(),
   calls: integer("calls").notNull().default(0),
 });
+
+/**
+ * The worker's latest self-report, so the API (a separate process) can show it. One row
+ * only. The content is validated when read, in src/worker-status.ts.
+ */
+export const workerStatus = pgTable(
+  "worker_status",
+  {
+    id: integer("id").primaryKey().default(1),
+    updatedAt: timestamptz("updated_at").notNull(),
+    report: jsonb("report").$type<unknown>().notNull(),
+  },
+  (t) => [check("worker_status_single_row", sql`${t.id} = 1`)],
+);
 
 export type CompetitorRow = typeof competitors.$inferSelect;
 export type ListingVersionRow = typeof listingVersions.$inferSelect;
