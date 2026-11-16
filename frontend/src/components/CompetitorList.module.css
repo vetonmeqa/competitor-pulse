@@ -1,0 +1,74 @@
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/*
+ * Mobile first: a card with the id and the Remove button on the first line and the
+ * details underneath. From 44rem up, the same four parts sit in one row.
+ */
+.item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "identity remove"
+    "badges   badges"
+    "polled   polled";
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.identity {
+  grid-area: identity;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* Lets a long id wrap instead of widening the card. */
+  min-width: 0;
+}
+
+.id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.title {
+  color: var(--muted);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.badges {
+  grid-area: badges;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.polled {
+  grid-area: polled;
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.remove {
+  grid-area: remove;
+}
+
+@media (min-width: 44rem) {
+  .item {
+    grid-template-columns: minmax(10rem, 1.4fr) minmax(0, 2fr) auto auto;
+    grid-template-areas: "identity badges polled remove";
+  }
+
+  .polled {
+    text-align: right;
+    white-space: nowrap;
+  }
+}

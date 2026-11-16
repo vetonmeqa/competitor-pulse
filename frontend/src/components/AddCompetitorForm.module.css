@@ -1,0 +1,57 @@
+.form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.label {
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.input {
+  flex: 1;
+  /* Lets the input shrink on a narrow screen instead of pushing the button out. */
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+  /* 16px or more, so iOS does not zoom the page when the field is focused. */
+  font-size: 1rem;
+  font-family: var(--font-mono);
+}
+
+.input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--danger-fg);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.error {
+  color: var(--danger-fg);
+  font-size: var(--text-small);
+  font-weight: 500;
+}
+
+.error:empty {
+  display: none;
+}
