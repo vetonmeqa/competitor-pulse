@@ -1,0 +1,53 @@
+.heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.competitorId {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--muted);
+}
+
+.section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* A comfortable tap target without making the checkbox itself huge. */
+  min-height: 2.75rem;
+  justify-self: start;
+  font-size: var(--text-small);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.filter input {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.timeline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.more {
+  justify-self: center;
+}

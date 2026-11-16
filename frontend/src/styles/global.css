@@ -1,0 +1,251 @@
+/*
+ * Design tokens and base rules. Components style themselves in CSS Modules and use
+ * only these variables, so the look stays consistent and both themes come for free.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1b1f27;
+  --muted: #5d6573;
+  --border: #e2e5ea;
+  --accent: #3451d1;
+  --accent-hover: #2740b0;
+  --on-accent: #ffffff;
+  --focus: #3451d1;
+
+  /* Badge and notice tones: a soft background with a readable foreground. */
+  --neutral-bg: #eceef2;
+  --neutral-fg: #454c59;
+  --ok-bg: #e2f3e7;
+  --ok-fg: #1c6233;
+  --info-bg: #e5ecff;
+  --info-fg: #2542ad;
+  --warn-bg: #fdf1d3;
+  --warn-fg: #6f4b00;
+  --danger-bg: #fce6e6;
+  --danger-fg: #9a1f1f;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  --radius: 10px;
+  --radius-small: 6px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%);
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-small: 0.875rem;
+  --text-large: 1.125rem;
+  --page-width: 60rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1218;
+    --surface: #171b23;
+    --text: #e8ebf0;
+    --muted: #a1a9b8;
+    --border: #2a303b;
+    --accent: #8ea2ff;
+    --accent-hover: #a9b8ff;
+    --on-accent: #0f1218;
+    --focus: #8ea2ff;
+
+    --neutral-bg: #252b36;
+    --neutral-fg: #c3cad6;
+    --ok-bg: #173323;
+    --ok-fg: #8ddba6;
+    --info-bg: #1c2752;
+    --info-fg: #aebcff;
+    --warn-bg: #3a2e0e;
+    --warn-fg: #f0cd7a;
+    --danger-bg: #3f1a1a;
+    --danger-fg: #f3a3a3;
+
+    --shadow: none;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* Stops iOS from enlarging text in landscape. */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+h1 {
+  font-size: 1.5rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--text-large);
+  line-height: 1.3;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+/* One visible focus style for everything, shown for keyboard use only. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-small);
+}
+
+/* Buttons. `.button` is the quiet default; `.button-primary` is the one main action. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  /* At least 44px tall, so it is easy to hit on a phone. */
+  min-height: 2.75rem;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  font-size: var(--text-small);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.button-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.button-primary:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.button-danger:hover:not(:disabled) {
+  border-color: var(--danger-fg);
+  color: var(--danger-fg);
+}
+
+/*
+ * Tones. An element with data-tone gets a matching background and text colour through
+ * these two variables, so badges and notices share one definition.
+ */
+[data-tone="neutral"] {
+  --tone-bg: var(--neutral-bg);
+  --tone-fg: var(--neutral-fg);
+}
+
+[data-tone="ok"] {
+  --tone-bg: var(--ok-bg);
+  --tone-fg: var(--ok-fg);
+}
+
+[data-tone="info"] {
+  --tone-bg: var(--info-bg);
+  --tone-fg: var(--info-fg);
+}
+
+[data-tone="warn"] {
+  --tone-bg: var(--warn-bg);
+  --tone-fg: var(--warn-fg);
+}
+
+[data-tone="danger"] {
+  --tone-bg: var(--danger-bg);
+  --tone-fg: var(--danger-fg);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: var(--text-small);
+}
+
+/* For text that only screen readers should get. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

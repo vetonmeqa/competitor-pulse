@@ -1,0 +1,124 @@
+.card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+/* A change stands out from the many polls where nothing happened. */
+.card[data-changed="true"] {
+  border-left-color: var(--accent);
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.time {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.ago {
+  /* Pushes the badge to the right while the two times stay together. */
+  margin-right: auto;
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+}
+
+.source {
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.reason {
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.pulse {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: currentcolor;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.changes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.field {
+  font-weight: 600;
+}
+
+.before {
+  color: var(--muted);
+}
+
+.after {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+  border-radius: 3px;
+  padding: 0 0.2em;
+  text-decoration: none;
+}
+
+.listing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-small);
+}
+
+.listingRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.listingRow dt {
+  color: var(--muted);
+}
+
+@media (min-width: 36rem) {
+  .change,
+  .listingRow {
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+  }
+}
