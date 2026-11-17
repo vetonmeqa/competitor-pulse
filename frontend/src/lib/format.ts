@@ -1,5 +1,11 @@
 const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const count = new Intl.NumberFormat();
+
+/** "6,000" in the viewer's locale. */
+export function formatCount(value: number): string {
+  return count.format(value);
+}
 
 /** "10 Sep 2026, 12:00:05" in the viewer's locale and time zone. */
 export function formatDateTime(iso: string): string {

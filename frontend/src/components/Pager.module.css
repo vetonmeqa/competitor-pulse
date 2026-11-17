@@ -1,0 +1,93 @@
+/*
+ * Mobile first: the two arrows at the ends with "Page 3 of 40" between them. From 40rem
+ * up, the page numbers take the place of that text.
+ */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.pages {
+  display: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.position {
+  color: var(--muted);
+  font-size: var(--text-small);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The `.pager` prefix makes these win over the global link and button styles. */
+.pager .page {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* A square for one or two digits that grows for more. 44px, for touch. */
+  min-width: 2.75rem;
+  height: 2.75rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-small);
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: 600;
+  /* Digits of equal width, so the row does not shift between pages. */
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.pager .page:hover {
+  background: var(--neutral-bg);
+}
+
+.pager .page[aria-current="page"] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.gap {
+  /* As wide as a page number, so the row keeps its width when a gap replaces one. */
+  width: 2.75rem;
+  color: var(--muted);
+  text-align: center;
+  user-select: none;
+}
+
+.pager .step {
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.pager .step[aria-disabled="true"] {
+  border-color: var(--border);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chevron {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+@media (min-width: 40rem) {
+  .pager {
+    justify-content: flex-start;
+  }
+
+  .pages {
+    display: flex;
+  }
+
+  .position {
+    display: none;
+  }
+}

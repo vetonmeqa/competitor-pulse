@@ -55,3 +55,18 @@
 .error:empty {
   display: none;
 }
+
+.added {
+  color: var(--ok-fg);
+  font-size: var(--text-small);
+  font-weight: 500;
+}
+
+.added:empty {
+  display: none;
+}
+
+.addedId {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}

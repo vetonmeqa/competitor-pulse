@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, lte, min, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, ilike, lte, min, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "../db/client.js";
 import {
@@ -12,14 +12,78 @@ import type { SnapshotWithVersions } from "./dto.js";
 
 /** Everything the API reads from and writes to the database. */
 
+export interface CompetitorWithTitle {
+  competitor: CompetitorRow;
+  /** Title of the last listing seen, if any. */
+  title: string | null;
+}
+
+export interface CompetitorPage {
+  rows: CompetitorWithTitle[];
+  /** How many competitors match the search. Equal to `totalTracked` without a search. */
+  total: number;
+  /** How many competitors are tracked in all. */
+  totalTracked: number;
+  /** The page returned. Lower than the page asked for when that one is past the end. */
+  page: number;
+}
+
+/** Makes the `%`, `_` and `\` in a search text match themselves in a LIKE pattern. */
+const escapeLike = (text: string): string => text.replace(/[\\%_]/g, "\\$&");
+
+/**
+ * One page of competitors, by id. `search` keeps those whose id or current title contains
+ * the text, in any letter case. An empty search keeps all.
+ *
+ * A page past the end gives the last page. That happens in normal use, for example when
+ * the only competitor on the last page is removed, and the caller then needs no second
+ * request.
+ */
 export async function listCompetitors(
   db: Db,
-): Promise<{ competitor: CompetitorRow; title: string | null }[]> {
-  return db
+  options: { page: number; pageSize: number; search: string },
+): Promise<CompetitorPage> {
+  const pattern = `%${escapeLike(options.search)}%`;
+  const matches =
+    options.search === ""
+      ? undefined
+      : or(ilike(competitors.id, pattern), ilike(listingVersions.title, pattern));
+  const currentVersion = eq(listingVersions.id, competitors.currentVersionId);
+
+  const [totalTracked, matching] = await Promise.all([
+    db.$count(competitors),
+    matches === undefined
+      ? null
+      : db
+          .select({ total: count() })
+          .from(competitors)
+          .leftJoin(listingVersions, currentVersion)
+          .where(matches),
+  ]);
+  const total = matching === null ? totalTracked : (matching[0]?.total ?? 0);
+  const lastPage = Math.max(1, Math.ceil(total / options.pageSize));
+  const page = Math.min(options.page, lastPage);
+
+  const rows = await db
+    .select({ competitor: competitors, title: listingVersions.title })
+    .from(competitors)
+    .leftJoin(listingVersions, currentVersion)
+    .where(matches)
+    .orderBy(asc(competitors.id))
+    .limit(options.pageSize)
+    .offset((page - 1) * options.pageSize);
+
+  return { rows, total, totalTracked, page };
+}
+
+/** One competitor with its current title, or null when it is not tracked. */
+export async function getCompetitor(db: Db, id: string): Promise<CompetitorWithTitle | null> {
+  const [row] = await db
     .select({ competitor: competitors, title: listingVersions.title })
     .from(competitors)
     .leftJoin(listingVersions, eq(listingVersions.id, competitors.currentVersionId))
-    .orderBy(asc(competitors.id));
+    .where(eq(competitors.id, id));
+  return row ?? null;
 }
 
 /**

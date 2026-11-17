@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { competitor, mockApi, renderWithProviders } from "../test/helpers";
+import { competitor, competitorPage, mockApi, renderWithProviders } from "../test/helpers";
 import { AddCompetitorForm } from "./AddCompetitorForm";
 
 const input = () => screen.getByLabelText("Track a competitor");
@@ -11,7 +11,7 @@ describe("AddCompetitorForm", () => {
   it("adds a competitor and clears the field", async () => {
     const requests = mockApi({
       "POST /competitors": () => ({ status: 201, body: competitor() }),
-      "GET /competitors": () => ({ body: [] }),
+      "GET /competitors": () => ({ body: competitorPage([]) }),
     });
     renderWithProviders(<AddCompetitorForm />);
 
@@ -29,10 +29,34 @@ describe("AddCompetitorForm", () => {
     expect(screen.getByRole("alert")).toBeEmptyDOMElement();
   });
 
+  it("confirms the add with a link to the new competitor, until the user types again", async () => {
+    mockApi({
+      "POST /competitors": () => ({ status: 201, body: competitor({ id: "orbit-hr" }) }),
+      "GET /competitors": () => ({ body: competitorPage([]) }),
+    });
+    renderWithProviders(<AddCompetitorForm />);
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+
+    await userEvent.type(input(), "orbit-hr");
+    await userEvent.click(addButton());
+
+    // The list is paged, so the new competitor may not be on the page being shown.
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("Now tracking orbit-hr.");
+    });
+    expect(screen.getByRole("link", { name: "orbit-hr" })).toHaveAttribute(
+      "href",
+      "/competitors/orbit-hr",
+    );
+
+    await userEvent.type(input(), "a");
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
   it("submits with the Enter key", async () => {
     const requests = mockApi({
       "POST /competitors": () => ({ status: 201, body: competitor() }),
-      "GET /competitors": () => ({ body: [] }),
+      "GET /competitors": () => ({ body: competitorPage([]) }),
     });
     renderWithProviders(<AddCompetitorForm />);
 

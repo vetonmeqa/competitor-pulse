@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
-import { useCompetitors, useSnapshots } from "../api/hooks";
+import { useCompetitor, useSnapshots } from "../api/hooks";
 import { Badge } from "../components/Badge";
 import { Notice } from "../components/Notice";
 import { SnapshotCard } from "../components/SnapshotCard";
@@ -20,7 +20,7 @@ export function TimelinePage() {
   const [limit, setLimit] = useState(PAGE_SIZE);
 
   const snapshots = useSnapshots(id, { limit, changedOnly });
-  const competitor = useCompetitors().data?.find((candidate) => candidate.id === id);
+  const competitor = useCompetitor(id).data;
   const state = competitor ? competitorState(competitor) : null;
 
   const notTracked = snapshots.error instanceof ApiError && snapshots.error.status === 404;

@@ -1,4 +1,4 @@
-import type { Competitor, Snapshot, SystemStatus } from "./types";
+import type { Competitor, CompetitorPage, Snapshot, SystemStatus } from "./types";
 
 /** A response the API answered with an error status, carrying its code and message. */
 export class ApiError extends Error {
@@ -47,14 +47,32 @@ function parseJson(text: string): unknown {
   }
 }
 
+export interface CompetitorQuery {
+  page: number;
+  pageSize: number;
+  /** Text to find in the id or the title. Empty for no search. */
+  search: string;
+}
+
 export interface SnapshotQuery {
   limit: number;
   changedOnly: boolean;
 }
 
 export const api = {
-  listCompetitors: (signal?: AbortSignal) =>
-    request<Competitor[]>("/competitors", { signal: signal ?? null }),
+  listCompetitors: (query: CompetitorQuery, signal?: AbortSignal) => {
+    const params = new URLSearchParams({
+      page: String(query.page),
+      pageSize: String(query.pageSize),
+    });
+    if (query.search !== "") {
+      params.set("q", query.search);
+    }
+    return request<CompetitorPage>(`/competitors?${params}`, { signal: signal ?? null });
+  },
+
+  getCompetitor: (id: string, signal?: AbortSignal) =>
+    request<Competitor>(`/competitors/${encodeURIComponent(id)}`, { signal: signal ?? null }),
 
   addCompetitor: (id: string) =>
     request<Competitor>("/competitors", {

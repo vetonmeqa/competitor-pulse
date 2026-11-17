@@ -4,10 +4,16 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import type { Db } from "../db/client.js";
 import { readWorkerReport } from "../worker-status.js";
-import { type StatusDto, toCompetitorDto, toSnapshotDto } from "./dto.js";
+import {
+  type CompetitorPageDto,
+  type StatusDto,
+  toCompetitorDto,
+  toSnapshotDto,
+} from "./dto.js";
 import {
   addCompetitor,
   competitorExists,
+  getCompetitor,
   getQueueCounts,
   listCompetitors,
   listSnapshots,
@@ -34,6 +40,13 @@ const competitorId = z
   );
 
 const addCompetitorBody = z.object({ id: competitorId });
+
+const competitorsQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  /** Search text. Matched against the id and the current title. */
+  q: z.string().trim().max(100).default(""),
+});
 
 const snapshotsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
@@ -73,10 +86,30 @@ export function buildApp({ db, log, config }: AppOptions): FastifyInstance {
     return { ok: true };
   });
 
-  app.get("/api/competitors", async () => {
+  app.get("/api/competitors", async (request, reply) => {
+    const query = competitorsQuery.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send(errorBody("invalid_query", firstIssue(query.error)));
+    }
+    const { pageSize, q } = query.data;
     const now = new Date();
-    const rows = await listCompetitors(db);
-    return rows.map(({ competitor, title }) => toCompetitorDto(competitor, title, now));
+    const result = await listCompetitors(db, { page: query.data.page, pageSize, search: q });
+    const body: CompetitorPageDto = {
+      items: result.rows.map(({ competitor, title }) => toCompetitorDto(competitor, title, now)),
+      page: result.page,
+      pageSize,
+      total: result.total,
+      totalTracked: result.totalTracked,
+    };
+    return body;
+  });
+
+  app.get<IdParams>("/api/competitors/:id", async (request, reply) => {
+    const found = await getCompetitor(db, request.params.id);
+    if (found === null) {
+      return reply.code(404).send(errorBody("not_tracked", "This competitor is not tracked."));
+    }
+    return toCompetitorDto(found.competitor, found.title, new Date());
   });
 
   app.post("/api/competitors", async (request, reply) => {

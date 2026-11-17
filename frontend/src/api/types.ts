@@ -22,6 +22,18 @@ export interface Competitor {
   changedInLast24h: boolean;
 }
 
+/** One page of the competitor list, with the counts the pager needs. */
+export interface CompetitorPage {
+  items: Competitor[];
+  /** The page returned. Lower than the page asked for when that one is past the end. */
+  page: number;
+  pageSize: number;
+  /** How many competitors match the search. Equal to `totalTracked` without a search. */
+  total: number;
+  /** How many competitors are tracked in all. */
+  totalTracked: number;
+}
+
 export interface Change {
   field: ListingField;
   before: string;

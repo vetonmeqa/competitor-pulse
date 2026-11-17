@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { vi } from "vitest";
-import type { Competitor, Snapshot, SystemStatus } from "../api/types";
+import type { Competitor, CompetitorPage, Snapshot, SystemStatus } from "../api/types";
 import { routes } from "../App";
 
 export interface RecordedRequest {
@@ -84,6 +84,21 @@ export function competitor(overrides: Partial<Competitor> = {}): Competitor {
     lastPollStatus: "ok",
     lastChangedAt: null,
     changedInLast24h: false,
+    ...overrides,
+  };
+}
+
+/** A page of the list as the API returns it. By default the items are all there is. */
+export function competitorPage(
+  items: Competitor[],
+  overrides: Partial<CompetitorPage> = {},
+): CompetitorPage {
+  return {
+    items,
+    page: 1,
+    pageSize: 25,
+    total: items.length,
+    totalTracked: items.length,
     ...overrides,
   };
 }

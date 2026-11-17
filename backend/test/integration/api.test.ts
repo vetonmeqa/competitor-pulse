@@ -2,7 +2,12 @@ import { eq } from "drizzle-orm";
 import { pino } from "pino";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/api/app.js";
-import type { CompetitorDto, SnapshotDto, StatusDto } from "../../src/api/dto.js";
+import type {
+  CompetitorDto,
+  CompetitorPageDto,
+  SnapshotDto,
+  StatusDto,
+} from "../../src/api/dto.js";
 import { llmUsage, workerStatus } from "../../src/db/schema.js";
 import type { Observation } from "../../src/domain/evaluate.js";
 import type { Listing } from "../../src/domain/listing.js";
@@ -27,8 +32,13 @@ const post = (payload?: object) =>
   app.inject({ method: "POST", url: "/api/competitors", ...(payload ? { payload } : {}) });
 const remove = (id: string) => app.inject({ method: "DELETE", url: `/api/competitors/${id}` });
 
+async function competitorPage(query = ""): Promise<CompetitorPageDto> {
+  return (await get(`/api/competitors${query}`)).json();
+}
+
+/** The first page of the list, which holds everything in a test with a few competitors. */
 async function listCompetitors(): Promise<CompetitorDto[]> {
-  return (await get("/api/competitors")).json();
+  return (await competitorPage()).items;
 }
 
 async function listSnapshots(id = ID, query = ""): Promise<SnapshotDto[]> {
@@ -130,8 +140,14 @@ describe("POST /api/competitors", () => {
 });
 
 describe("GET /api/competitors", () => {
-  it("returns an empty list when nothing is tracked", async () => {
-    expect(await listCompetitors()).toEqual([]);
+  it("returns an empty first page when nothing is tracked", async () => {
+    expect(await competitorPage()).toEqual({
+      items: [],
+      page: 1,
+      pageSize: 25,
+      total: 0,
+      totalTracked: 0,
+    });
   });
 
   it("lists competitors by id, with their latest state", async () => {
@@ -184,6 +200,156 @@ describe("GET /api/competitors", () => {
     expect(await listCompetitors()).toMatchObject([
       { availability: "delisted", title: "Acme CRM", changedInLast24h: true },
     ]);
+  });
+});
+
+describe("GET /api/competitors, paging", () => {
+  /** c01 to c07, added out of order. */
+  async function addSeven(): Promise<void> {
+    for (const number of [5, 2, 7, 1, 4, 6, 3]) {
+      await addCompetitor(db, `c0${number}`);
+    }
+  }
+  const ids = (page: CompetitorPageDto) => page.items.map((competitor) => competitor.id);
+
+  it("returns one page at a time, by id, with the total", async () => {
+    await addSeven();
+
+    const first = await competitorPage("?pageSize=3");
+    expect(ids(first)).toEqual(["c01", "c02", "c03"]);
+    expect(first).toMatchObject({ page: 1, pageSize: 3, total: 7, totalTracked: 7 });
+
+    expect(ids(await competitorPage("?pageSize=3&page=2"))).toEqual(["c04", "c05", "c06"]);
+
+    const last = await competitorPage("?pageSize=3&page=3");
+    expect(ids(last)).toEqual(["c07"]);
+    expect(last).toMatchObject({ page: 3, total: 7 });
+  });
+
+  it("returns 25 competitors per page unless asked otherwise", async () => {
+    for (let number = 1; number <= 30; number++) {
+      await addCompetitor(db, `c${String(number).padStart(2, "0")}`);
+    }
+    const page = await competitorPage();
+    expect(page.items).toHaveLength(25);
+    expect(page).toMatchObject({ page: 1, pageSize: 25, total: 30 });
+  });
+
+  it("returns the last page when the page asked for is past the end", async () => {
+    await addSeven();
+    const page = await competitorPage("?pageSize=3&page=9");
+    expect(ids(page)).toEqual(["c07"]);
+    expect(page.page).toBe(3);
+  });
+
+  it("steps back a page when the only competitor on the last page is removed", async () => {
+    await addSeven();
+    await remove("c07");
+    const page = await competitorPage("?pageSize=3&page=3");
+    expect(ids(page)).toEqual(["c04", "c05", "c06"]);
+    expect(page).toMatchObject({ page: 2, total: 6 });
+  });
+
+  it.each(["?page=0", "?page=-1", "?page=abc", "?page=1.5", "?pageSize=0", "?pageSize=101"])(
+    "rejects %s",
+    async (query) => {
+      const response = await get(`/api/competitors${query}`);
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: "invalid_query" } });
+    },
+  );
+});
+
+describe("GET /api/competitors, search", () => {
+  beforeEach(async () => {
+    await addCompetitor(db, ID);
+    await record([ok(A)]); // titled "Acme CRM"
+    await addCompetitor(db, "orbit-hr");
+    await record([ok({ ...A, title: "Orbit HR" })], "orbit-hr");
+    await addCompetitor(db, "acme-payroll"); // never polled, so it has no title
+    await addCompetitor(db, "north_analytics");
+  });
+  const search = async (text: string, rest = "") =>
+    competitorPage(`?q=${encodeURIComponent(text)}${rest}`);
+  const ids = (page: CompetitorPageDto) => page.items.map((competitor) => competitor.id);
+
+  it("finds competitors whose id contains the text", async () => {
+    const page = await search("acme");
+    expect(ids(page)).toEqual(["acme-crm", "acme-payroll"]);
+    expect(page).toMatchObject({ total: 2, totalTracked: 4 });
+  });
+
+  it("finds competitors by their current title", async () => {
+    expect(ids(await search("orbit h"))).toEqual(["orbit-hr"]);
+    expect(ids(await search("CRM"))).toEqual(["acme-crm"]);
+  });
+
+  it("ignores letter case and spaces around the text", async () => {
+    expect(ids(await search("  ACME-p "))).toEqual(["acme-payroll"]);
+  });
+
+  it("searches every competitor, not only the page being shown", async () => {
+    const page = await search("analytics", "&pageSize=1");
+    expect(ids(page)).toEqual(["north_analytics"]);
+    expect(page).toMatchObject({ page: 1, total: 1 });
+  });
+
+  it("pages through the matches and counts only them", async () => {
+    const page = await search("acme", "&pageSize=1&page=2");
+    expect(ids(page)).toEqual(["acme-payroll"]);
+    expect(page).toMatchObject({ page: 2, total: 2, totalTracked: 4 });
+  });
+
+  it("returns an empty page and the tracked count when nothing matches", async () => {
+    expect(await search("zzz")).toEqual({
+      items: [],
+      page: 1,
+      pageSize: 25,
+      total: 0,
+      totalTracked: 4,
+    });
+  });
+
+  it("treats %, _ and \\ as plain characters, not as wildcards", async () => {
+    expect(ids(await search("%"))).toEqual([]);
+    expect(ids(await search("\\"))).toEqual([]);
+    // As a wildcard, "_" would match any single character and so every competitor.
+    expect(ids(await search("_"))).toEqual(["north_analytics"]);
+    expect(ids(await search("north_a"))).toEqual(["north_analytics"]);
+    expect(ids(await search("north-a"))).toEqual([]);
+  });
+
+  it("returns everything for an empty search", async () => {
+    expect((await search("   ")).total).toBe(4);
+  });
+
+  it("rejects a search text longer than 100 characters", async () => {
+    const response = await get(`/api/competitors?q=${"a".repeat(101)}`);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: "invalid_query" } });
+  });
+});
+
+describe("GET /api/competitors/:id", () => {
+  it("returns one competitor with its latest state", async () => {
+    await addCompetitor(db, ID);
+    await record([ok(A), ok(B)]);
+
+    const response = await get(`/api/competitors/${ID}`);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      id: ID,
+      availability: "listed",
+      title: "Acme CRM",
+      lastPollStatus: "ok",
+      changedInLast24h: true,
+    });
+  });
+
+  it("answers 404 for a competitor that is not tracked", async () => {
+    const response = await get("/api/competitors/nope");
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: "not_tracked" } });
   });
 });
 

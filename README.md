@@ -323,6 +323,33 @@ It deletes the competitor and its history. Adding it again starts fresh. The app
 confirmation first. A soft delete that keeps the 90 days would be the alternative if
 "remove" turned out to mean "pause".
 
+### The competitor list: paging and search
+
+- **The server pages and searches.** The list returns one page (25 competitors, at most
+  100), so the response and the 5-second refresh stay the same size at 6,000 competitors
+  as at 5.
+- **Search looks at every tracked competitor,** not at the rows on screen. It matches the
+  id and the current title, in any letter case. `%` and `_` in the search text are plain
+  characters.
+- **Each page carries the counts:** how many competitors match and how many are tracked,
+  for "12 of 6,000 competitors" and "Showing 26–50 of 312".
+- **A page past the end returns the last page.** That happens in normal use: the only
+  competitor on the last page is removed. The response says which page it is.
+- **The page and the search are in the URL,** so a view can be bookmarked and the back
+  button works.
+- **The timeline reads its competitor from `GET /api/competitors/:id`,** because the
+  competitor may not be on the page of the list that is loaded.
+
+**Considered instead:** a cursor ("load more" after the last id). It stays fast on any
+table size and no row shifts when another is added, but it has no page numbers, and the
+refresh would have to re-fetch every page loaded so far. Skipping rows by offset costs
+more the deeper the page, which does not matter here: the last page of 6,000 takes about
+15 ms. For the snapshots table, with millions of rows, I would use a cursor.
+
+**Known limits:** the search reads every competitor row, which is fine for thousands. At
+a much larger size it would need a trigram index. A competitor added or removed while
+someone is paging moves the rows after it by one place.
+
 ## The numbers that do not fit
 
 **1. Polling.** 6,000 competitors every 15 minutes is 6.67 requests per second. The
@@ -369,8 +396,6 @@ enough, and the standby gives failover. Many workers would need a shared rate li
 ## Left out on purpose
 
 - **Authentication.** The brief says one internal user.
-- **Paging and search on the competitor list.** At 6,000 competitors the list endpoint
-  and the list view both need them.
 - **Tiered or adaptive polling, budget pacing, merging pending summaries.** Described
   above.
 - **Table partitioning.** Described above.
@@ -391,13 +416,19 @@ accessibility audit was run. `npm audit` reports findings in development tools o
 ## API
 
 ```
-GET    /api/competitors                      -> [Competitor, ...]
+GET    /api/competitors                      -> { items, page, pageSize, total, totalTracked }
+GET    /api/competitors/:id                  -> Competitor, or 404
 POST   /api/competitors      { "id": string } -> 201, or 409 if tracked, 400 if invalid
 DELETE /api/competitors/:id                  -> 204, or 404
 GET    /api/competitors/:id/snapshots        -> [Snapshot, ...]   newest first
 GET    /api/status                           -> queue lag, LLM usage, worker state
 GET    /api/health                           -> { "ok": true }
 ```
+
+`competitors` accepts `?page=` (from 1), `?pageSize=` (default 25, at most 100) and `?q=`,
+which keeps the competitors whose id or current title contains the text. `items` is sorted
+by id. `total` counts the competitors that match `q`, `totalTracked` counts all of them,
+and `page` is the page returned: the last one when the page asked for is past the end.
 
 `snapshots` accepts `?limit=` (default 100, at most 1000) and `?changedOnly=true`.
 
@@ -446,8 +477,8 @@ Backend settings for this mode are in [backend/.env.example](backend/.env.exampl
 | Command | Where | What it runs |
 | --- | --- | --- |
 | `npm test` | `backend` | 192 unit tests. No database needed |
-| `npm run test:integration` | `backend` | 126 tests against PostgreSQL, in a separate `pulse_test` database |
-| `npm test` | `frontend` | 68 component and page tests against a stubbed API |
+| `npm run test:integration` | `backend` | 147 tests against PostgreSQL, in a separate `pulse_test` database |
+| `npm test` | `frontend` | 97 component and page tests against a stubbed API |
 | `npm run typecheck`, `npm run lint` | both | Strict TypeScript and type-aware lint rules |
 | `npm run db:generate` | `backend` | Writes a new migration after a schema change |
 

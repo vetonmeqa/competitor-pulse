@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type SnapshotQuery } from "./client";
+import { api, type CompetitorQuery, type SnapshotQuery } from "./client";
 
 /**
  * The data changes on the server as polls come in, so every list refreshes on a timer.
@@ -8,15 +8,29 @@ import { api, type SnapshotQuery } from "./client";
 const REFRESH_MS = 5000;
 
 const keys = {
+  /** The start of every competitor key, so one call refreshes the list and the single ones. */
   competitors: ["competitors"] as const,
+  competitorList: (query: CompetitorQuery) => ["competitors", "list", query] as const,
+  competitor: (id: string) => ["competitors", "one", id] as const,
   snapshots: (id: string, query: SnapshotQuery) => ["snapshots", id, query] as const,
   status: ["status"] as const,
 };
 
-export function useCompetitors() {
+/** One page of the list. The server does the paging and the search. */
+export function useCompetitors(query: CompetitorQuery) {
   return useQuery({
-    queryKey: keys.competitors,
-    queryFn: ({ signal }) => api.listCompetitors(signal),
+    queryKey: keys.competitorList(query),
+    queryFn: ({ signal }) => api.listCompetitors(query, signal),
+    refetchInterval: REFRESH_MS,
+    // Keep showing the current page while another page or another search loads.
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useCompetitor(id: string) {
+  return useQuery({
+    queryKey: keys.competitor(id),
+    queryFn: ({ signal }) => api.getCompetitor(id, signal),
     refetchInterval: REFRESH_MS,
   });
 }

@@ -1,4 +1,5 @@
 import { type SubmitEvent, useId, useState } from "react";
+import { Link } from "react-router";
 import { useAddCompetitor } from "../api/hooks";
 import styles from "./AddCompetitorForm.module.css";
 
@@ -29,6 +30,8 @@ export function AddCompetitorForm() {
 
   // A problem found here, or one the server reported for the last attempt.
   const error = validationError ?? addCompetitor.error?.message ?? null;
+  // The competitor just added, until the user types again.
+  const added = addCompetitor.data ?? null;
 
   function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -78,6 +81,18 @@ export function AddCompetitorForm() {
       {/* Always in the page, so a screen reader announces the message when it appears. */}
       <p id={errorId} className={styles.error} role="alert">
         {error}
+      </p>
+      {/* The list is paged, so the new competitor may not be on the page being shown. */}
+      <p className={styles.added} role="status">
+        {added !== null && (
+          <>
+            Now tracking{" "}
+            <Link className={styles.addedId} to={`/competitors/${encodeURIComponent(added.id)}`}>
+              {added.id}
+            </Link>
+            .
+          </>
+        )}
       </p>
     </form>
   );
