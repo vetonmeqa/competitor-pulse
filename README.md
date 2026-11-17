@@ -14,6 +14,7 @@ app shows the list of competitors and each competitor's history.
 - [Left out on purpose](#left-out-on-purpose)
 - [API](#api)
 - [Development and tests](#development-and-tests)
+- [Deploy on Render](#deploy-on-render)
 - [AI tools](#ai-tools)
 
 ## Run it
@@ -448,7 +449,8 @@ enough, and the standby gives failover. Many workers would need a shared rate li
 - **Live updates over SSE or WebSockets.** The app refreshes every 5 seconds.
 - **Metrics and alerting.** `GET /api/status` and structured logs are there; a metrics
   endpoint is not.
-- **CI and a cloud deploy.**
+- **CI and a running cloud deploy.** [render.yaml](render.yaml) is an example only; see
+  [Deploy on Render](#deploy-on-render).
 
 Known gaps in verification: the frontend was checked in Chrome at phone, tablet and
 desktop widths, not on physical phones or in Safari and Firefox, and no automated
@@ -539,6 +541,53 @@ control endpoints, and the full Docker stack was put through these scenarios: mo
 than the rate limit allows, a rate limit lowered without notice, forced source failures,
 a slow LLM, a failing LLM, the daily cap, a database restart, and an API container being
 replaced.
+
+## Deploy on Render
+
+[render.yaml](render.yaml) is an example [Render](https://render.com) Blueprint: the same
+system as `docker-compose.yml`, on managed services. No code changes are needed for it.
+
+**Not verified:** the blueprint was written against Render's documentation. It has not
+been deployed.
+
+| In Docker Compose | On Render | Notes |
+| --- | --- | --- |
+| `db` | Render Postgres 16 | `DATABASE_URL` is its private-network address |
+| `migrate` | Pre-deploy command of the API | `node dist/db/migrate.js`, before each new version starts |
+| `api` | Web service, from [backend/Dockerfile](backend/Dockerfile) | Listens on the `PORT` that Render sets. Health check on `/api/health` |
+| `worker` | Background worker, the same image | `node dist/main-worker.js`, one instance |
+| `web` | Static site | Two rewrite rules replace nginx: `/api/*` goes to the API, every other path to `index.html` |
+| `listing-source`, `mock-llm` | Not included | See below |
+
+To use it:
+
+1. In Render, choose **New > Blueprint** and pick this repository.
+2. Fill in the values Render asks for. They are the ones that do not belong in a file:
+   `SOURCE_BASE_URL`, and `LLM_BASE_URL`, `LLM_API_KEY` and `LLM_MODEL` for an OpenAI
+   compatible endpoint. For Claude, change `LLM_PROVIDER` to `anthropic` in `render.yaml`
+   and fill in only `LLM_API_KEY`.
+3. Check the address Render gave the API. A service name that is already taken gets a
+   suffix. If that happened, put the real address in the `/api/*` rewrite rule.
+4. Open the address of `competitor-pulse-web`.
+
+What to know before using it:
+
+- **The source and the LLM.** The worker needs a source it can reach over HTTP. To try
+  the system with the bundled servers, run each as a Render private service
+  (`node listing-source-server.mjs` and `python3 mock-llm-server.py`; both listen on
+  `PORT`) and use their internal addresses for `SOURCE_BASE_URL` and `LLM_BASE_URL`. The
+  LLM address ends in `/v1`.
+- **No authentication.** The API has none, so anyone with the address can add and remove
+  competitors. Put it behind access control before real use. `LLM_DAILY_CAP` still limits
+  the LLM calls.
+- **Cost.** The API, the worker and the database are paid instances; the static site is
+  free. The free plan does not fit: it has no background workers and no pre-deploy
+  command.
+- **Schema changes.** The migration runs before the new API starts, but the worker is
+  deployed at the same time and can start before the migration has finished. For a release
+  with a schema change, deploy the API first.
+- **Poll interval.** The blueprint sets `POLL_INTERVAL_SECONDS` to `900`, the production
+  value, not the `30` used in Docker.
 
 ## AI tools
 

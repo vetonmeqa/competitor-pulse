@@ -1,0 +1,102 @@
+# An example Render Blueprint (https://render.com/docs/blueprint-spec): the same system
+# as docker-compose.yml, on managed services. It is an example. It has not been deployed.
+#
+# In Render: New > Blueprint, pick this repository, and fill in the values it asks for.
+# See "Deploy on Render" in the README.
+#
+#   db       -> a managed PostgreSQL database
+#   migrate  -> the pre-deploy command of the api
+#   api      -> a web service, from backend/Dockerfile
+#   worker   -> a background worker, the same image with another command
+#   web      -> a static site, whose rewrite rules do the job of nginx
+#
+# The bundled listing source and mock LLM are not part of it. No plan is set, so each
+# service gets Render's smallest paid instance. The free plan has no background workers
+# and no pre-deploy command.
+
+databases:
+  - name: competitor-pulse-db
+    postgresMajorVersion: "16"
+
+# Settings the api and the worker must agree on: the api reports them in /api/status.
+envVarGroups:
+  - name: competitor-pulse-shared
+    envVars:
+      - key: POLL_INTERVAL_SECONDS
+        value: "900"
+      - key: LLM_DAILY_CAP
+        value: "2000"
+      - key: LOG_LEVEL
+        value: info
+
+services:
+  # The HTTP API. Render sets PORT, which the api listens on.
+  - type: web
+    name: competitor-pulse-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    # Applies the database migrations before each new version starts.
+    preDeployCommand: node dist/db/migrate.js
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: competitor-pulse-db
+          property: connectionString
+      - fromGroup: competitor-pulse-shared
+
+  # The poller and the summariser. Run exactly one: the rate limiter lives in its memory.
+  # During a deploy the new instance waits for the old one to release the worker lock.
+  - type: worker
+    name: competitor-pulse-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: node dist/main-worker.js
+    numInstances: 1
+    envVars:
+      # The private-network address: a direct connection, which the worker lock needs.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: competitor-pulse-db
+          property: connectionString
+      - fromGroup: competitor-pulse-shared
+      # `sync: false` means Render asks for the value and keeps it out of this file.
+      - key: SOURCE_BASE_URL
+        sync: false
+      # For Claude, change this to `anthropic` and set only LLM_API_KEY.
+      - key: LLM_PROVIDER
+        value: openai-compatible
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+
+  # The React app, built once and served as static files.
+  - type: web
+    name: competitor-pulse-web
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+    routes:
+      # The API, on the same origin as the page, so the browser needs no CORS setup.
+      # Render adds a suffix to a service name that is already taken: if it did, put the
+      # real address of the api here.
+      - type: rewrite
+        source: /api/*
+        destination: https://competitor-pulse-api.onrender.com/api/*
+      # Everything else is the single-page app. Files that exist are served as they are.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Vite puts a content hash in every asset file name, so these can be cached for good.
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
