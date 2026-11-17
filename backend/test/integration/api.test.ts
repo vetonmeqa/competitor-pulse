@@ -540,6 +540,99 @@ describe("GET /api/competitors/:id/snapshots", () => {
     expect(changes.every((snapshot) => snapshot.changed)).toBe(true);
   });
 
+  describe("paging with ?before", () => {
+    const prices = (list: SnapshotDto[]) => list.map((snapshot) => snapshot.price);
+    const priced = (number: number): Observation => ok({ ...A, price: `€${String(number)}` });
+    /** Seven polls with the prices €1 (oldest) to €7 (newest), each one a change. */
+    async function recordSeven(): Promise<void> {
+      await record([1, 2, 3, 4, 5, 6, 7].map(priced));
+    }
+    /** Reads the whole history a page at a time, the way the app does. */
+    async function readAll(limit: number, rest = ""): Promise<SnapshotDto[][]> {
+      const pages: SnapshotDto[][] = [];
+      let before = "";
+      for (;;) {
+        const page = await listSnapshots(ID, `?limit=${String(limit)}${before}${rest}`);
+        pages.push(page);
+        const last = page.at(-1);
+        if (page.length < limit || last === undefined) {
+          return pages;
+        }
+        before = `&before=${String(last.id)}`;
+      }
+    }
+
+    it("returns the snapshots older than the given one, newest first", async () => {
+      await recordSeven();
+      const first = await listSnapshots(ID, "?limit=3");
+      expect(prices(first)).toEqual(["€7", "€6", "€5"]);
+
+      const older = await listSnapshots(ID, `?limit=3&before=${String(first.at(-1)?.id)}`);
+      expect(prices(older)).toEqual(["€4", "€3", "€2"]);
+    });
+
+    it("walks the whole history with no snapshot missing or repeated", async () => {
+      await recordSeven();
+      const pages = await readAll(3);
+      expect(pages.map(prices)).toEqual([["€7", "€6", "€5"], ["€4", "€3", "€2"], ["€1"]]);
+    });
+
+    it("is not shifted by polls that arrive while someone is paging", async () => {
+      await recordSeven();
+      const first = await listSnapshots(ID, "?limit=3");
+      await store.recordPoll(ID, new Date(), priced(8));
+      await store.recordPoll(ID, new Date(), priced(9));
+
+      const older = await listSnapshots(ID, `?limit=3&before=${String(first.at(-1)?.id)}`);
+      expect(prices(older)).toEqual(["€4", "€3", "€2"]);
+    });
+
+    it("keeps the order of snapshots that have the same time", async () => {
+      const sameTime = minutesAgo(5);
+      for (const number of [1, 2, 3, 4]) {
+        await store.recordPoll(ID, sameTime, priced(number));
+      }
+      expect((await readAll(1)).map(prices)).toEqual([["€4"], ["€3"], ["€2"], ["€1"], []]);
+    });
+
+    it("pages through the changes only, when asked", async () => {
+      await record([ok(A), ok(A), ok(B), ok(B), ok(C), ok(C), ok(A)]);
+      const pages = await readAll(1, "&changedOnly=true");
+      expect(pages.map((page) => page.map((snapshot) => snapshot.tagline))).toEqual([
+        [A.tagline],
+        [C.tagline],
+        [B.tagline],
+        [],
+      ]);
+      expect(pages.flat().every((snapshot) => snapshot.changed)).toBe(true);
+    });
+
+    it("returns nothing after the oldest snapshot", async () => {
+      await recordSeven();
+      const oldest = (await listSnapshots()).at(-1);
+      expect(await listSnapshots(ID, `?before=${String(oldest?.id)}`)).toEqual([]);
+    });
+
+    it("returns nothing for a snapshot that does not exist or belongs to another competitor", async () => {
+      await recordSeven();
+      await addCompetitor(db, "orbit-hr");
+      await record([ok(B)], "orbit-hr");
+      const [other] = await listSnapshots("orbit-hr");
+
+      expect(await listSnapshots(ID, "?before=999999")).toEqual([]);
+      expect(await listSnapshots(ID, `?before=${String(other?.id)}`)).toEqual([]);
+    });
+
+    it.each(["?before=0", "?before=-3", "?before=abc", "?before=1.5"])(
+      "answers 400 for %s",
+      async (query) => {
+        const response = await get(`/api/competitors/${ID}/snapshots${query}`);
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({ error: { code: "invalid_query" } });
+      },
+    );
+  });
+
   it.each(["?limit=0", "?limit=abc", "?limit=5000", "?limit=1.5", "?changedOnly=maybe"])(
     "answers 400 for %s",
     async (query) => {

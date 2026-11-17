@@ -425,18 +425,73 @@ describe("competitor timeline", () => {
     );
   });
 
-  it("offers older snapshots only when the page is full", async () => {
-    const full = Array.from({ length: 50 }, (_unused, index) => snapshot({ id: 100 - index }));
-    const requests = mockApi({
+  /** A history of `count` snapshots, ids `count` (newest) down to 1, served a page at a time. */
+  function longHistory(count: number) {
+    const all = Array.from({ length: count }, (_unused, index) => snapshot({ id: count - index }));
+    return mockApi({
       "GET /status": status,
       "GET /competitors/acme-crm": () => ({ body: competitor() }),
-      "GET /competitors/acme-crm/snapshots": () => ({ body: full }),
+      "GET /competitors/acme-crm/snapshots": (request) => {
+        const params = new URLSearchParams(request.path.split("?")[1]);
+        const before = params.get("before");
+        const older = before === null ? all : all.filter((item) => item.id < Number(before));
+        return { body: older.slice(0, Number(params.get("limit"))) };
+      },
     });
-    renderApp("/competitors/acme-crm");
+  }
+  const snapshotRequests = (requests: { path: string }[]) =>
+    requests.map((request) => request.path).filter((path) => path.includes("/snapshots"));
 
-    await userEvent.click(await screen.findByRole("button", { name: "Show older snapshots" }));
+  it("loads older snapshots by asking for the ones before the last one shown", async () => {
+    const requests = longHistory(120);
+    renderApp("/competitors/acme-crm");
+    expect(await screen.findAllByRole("article")).toHaveLength(50);
+    expect(snapshotRequests(requests)).toEqual([
+      "/competitors/acme-crm/snapshots?limit=50&changedOnly=false",
+    ]);
+
+    // The first page ends with snapshot 71, so the next one is "before 71".
+    await userEvent.click(screen.getByRole("button", { name: "Show older snapshots" }));
     await waitFor(() => {
-      expect(requests.at(-1)?.path).toContain("limit=100");
+      expect(screen.getAllByRole("article")).toHaveLength(100);
+    });
+    expect(snapshotRequests(requests).at(-1)).toBe(
+      "/competitors/acme-crm/snapshots?limit=50&changedOnly=false&before=71",
+    );
+
+    // The last page is not full, which is how the app knows the history ends there.
+    await userEvent.click(screen.getByRole("button", { name: "Show older snapshots" }));
+    await waitFor(() => {
+      expect(screen.getAllByRole("article")).toHaveLength(120);
+    });
+    expect(snapshotRequests(requests).at(-1)).toContain("before=21");
+    expect(screen.queryByRole("button", { name: "Show older snapshots" })).not.toBeInTheDocument();
+  });
+
+  it("stops offering older snapshots when a full page turns out to be the last", async () => {
+    longHistory(50);
+    renderApp("/competitors/acme-crm");
+    expect(await screen.findAllByRole("article")).toHaveLength(50);
+
+    await userEvent.click(screen.getByRole("button", { name: "Show older snapshots" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Show older snapshots" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getAllByRole("article")).toHaveLength(50);
+  });
+
+  it("keeps the changes-only filter while loading older snapshots", async () => {
+    const requests = longHistory(120);
+    renderApp("/competitors/acme-crm?show=changes");
+    expect(await screen.findAllByRole("article")).toHaveLength(50);
+
+    await userEvent.click(screen.getByRole("button", { name: "Show older snapshots" }));
+    await waitFor(() => {
+      expect(snapshotRequests(requests).at(-1)).toBe(
+        "/competitors/acme-crm/snapshots?limit=50&changedOnly=true&before=71",
+      );
     });
   });
 

@@ -115,10 +115,19 @@ export async function competitorExists(db: Db, id: string): Promise<boolean> {
   return (await db.$count(competitors, eq(competitors.id, id))) > 0;
 }
 
+/**
+ * A competitor's snapshots, newest first.
+ *
+ * `before` is the id of a snapshot of this competitor and returns only the snapshots
+ * older than it. The caller pages through the history by passing the id of the last
+ * snapshot it has: each request reads only its own rows, however far back it is, and
+ * polls that arrive meanwhile do not shift anything. An id that does not exist (any more)
+ * returns nothing.
+ */
 export async function listSnapshots(
   db: Db,
   competitorId: string,
-  options: { limit: number; changedOnly: boolean },
+  options: { limit: number; changedOnly: boolean; before?: number | undefined },
 ): Promise<SnapshotWithVersions[]> {
   const previous = alias(listingVersions, "previous_version");
   return db
@@ -130,10 +139,25 @@ export async function listSnapshots(
       and(
         eq(snapshots.competitorId, competitorId),
         options.changedOnly ? eq(snapshots.changed, true) : undefined,
+        options.before === undefined ? undefined : olderThan(db, competitorId, options.before),
       ),
     )
     .orderBy(desc(snapshots.fetchedAt), desc(snapshots.id))
     .limit(options.limit);
+}
+
+/**
+ * "Older than snapshot `cursorId`", in the order of the timeline: by time, then by id.
+ * Comparing the pair (time, id) as one value is what lets PostgreSQL jump straight to the
+ * position in the timeline index instead of reading the newer rows first.
+ */
+function olderThan(db: Db, competitorId: string, cursorId: number) {
+  const cursor = alias(snapshots, "cursor_snapshot");
+  const cursorTime = db
+    .select({ fetchedAt: cursor.fetchedAt })
+    .from(cursor)
+    .where(and(eq(cursor.id, cursorId), eq(cursor.competitorId, competitorId)));
+  return sql`(${snapshots.fetchedAt}, ${snapshots.id}) < ((${cursorTime}), ${cursorId})`;
 }
 
 export interface QueueCounts {

@@ -345,11 +345,30 @@ confirmation first. A soft delete that keeps the 90 days would be the alternativ
 table size and no row shifts when another is added, but it has no page numbers, and the
 refresh would have to re-fetch every page loaded so far. Skipping rows by offset costs
 more the deeper the page, which does not matter here: the last page of 6,000 takes about
-15 ms. For the snapshots table, with millions of rows, I would use a cursor.
+15 ms. The timeline, on a table with millions of rows, does use a cursor (next section).
 
 **Known limits:** the search reads every competitor row, which is fine for thousands. At
 a much larger size it would need a trigram index. A competitor added or removed while
 someone is paging moves the rows after it by one place.
+
+### The timeline: older snapshots by cursor
+
+- **The timeline loads 50 snapshots,** and "Show older snapshots" asks for the 50 before
+  the last one shown: `?before=<snapshot id>`. The whole 90 days can be reached this way,
+  and the body stays the array of the brief's contract.
+- **The query jumps to its place in the index.** It compares the pair (time, id) with the
+  cursor's, which the timeline index answers directly. Measured on 208,000 rows, for 50
+  snapshots that are 8,000 deep in one competitor's history: 13 pages read in 0.09 ms.
+  The same rows by offset: 865 pages and 2.9 ms, growing with the depth.
+- **Polls that arrive meanwhile do not shift anything,** because a page is defined by the
+  snapshot before it and not by a position.
+- **The end of the history is a page that is not full.** When the last page happens to be
+  full, one more request returns nothing.
+
+**Known limit:** the 5-second refresh fetches every loaded page again, one small request
+each, so the list never has a gap or a repeat. Someone who has loaded 20 pages causes 20
+requests per refresh. Refreshing only the newest page would be cheaper, but a summary
+still pending on an older page would then stop updating.
 
 ## The numbers that do not fit
 
@@ -437,7 +456,8 @@ in response headers:
 | `X-Page` | The page returned: the last one when the page asked for is past the end |
 | `X-Page-Size` | The page size used |
 
-`snapshots` accepts `?limit=` (default 100, at most 1000) and `?changedOnly=true`.
+`snapshots` accepts `?limit=` (default 100, at most 1000), `?changedOnly=true` and
+`?before=<snapshot id>`, which returns only the snapshots older than that one.
 
 A snapshot has the fields of the brief plus a few more:
 
@@ -484,8 +504,8 @@ Backend settings for this mode are in [backend/.env.example](backend/.env.exampl
 | Command | Where | What it runs |
 | --- | --- | --- |
 | `npm test` | `backend` | 192 unit tests. No database needed |
-| `npm run test:integration` | `backend` | 148 tests against PostgreSQL, in a separate `pulse_test` database |
-| `npm test` | `frontend` | 97 component and page tests against a stubbed API |
+| `npm run test:integration` | `backend` | 159 tests against PostgreSQL, in a separate `pulse_test` database |
+| `npm test` | `frontend` | 99 component and page tests against a stubbed API |
 | `npm run typecheck`, `npm run lint` | both | Strict TypeScript and type-aware lint rules |
 | `npm run db:generate` | `backend` | Writes a new migration after a schema change |
 

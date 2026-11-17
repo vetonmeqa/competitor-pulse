@@ -62,6 +62,8 @@ export interface CompetitorQuery {
 export interface SnapshotQuery {
   limit: number;
   changedOnly: boolean;
+  /** The id of a snapshot. Only the snapshots older than it are returned. */
+  before?: number | undefined;
 }
 
 export const api = {
@@ -103,6 +105,9 @@ export const api = {
       limit: String(query.limit),
       changedOnly: String(query.changedOnly),
     });
+    if (query.before !== undefined) {
+      params.set("before", String(query.before));
+    }
     return request<Snapshot[]>(`/competitors/${encodeURIComponent(id)}/snapshots?${params}`, {
       signal: signal ?? null,
     });

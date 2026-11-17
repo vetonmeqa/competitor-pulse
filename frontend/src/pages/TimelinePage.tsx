@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
 import { useCompetitor, useSnapshots } from "../api/hooks";
@@ -8,24 +7,18 @@ import { SnapshotCard } from "../components/SnapshotCard";
 import { competitorState } from "../lib/labels";
 import styles from "./pages.module.css";
 
-const PAGE_SIZE = 50;
-/** The most the API returns in one request. */
-const MAX_SNAPSHOTS = 1000;
-
 export function TimelinePage() {
   const { id = "" } = useParams();
   // The filter lives in the URL, so a filtered view can be bookmarked and shared.
   const [searchParams, setSearchParams] = useSearchParams();
   const changedOnly = searchParams.get("show") === "changes";
-  const [limit, setLimit] = useState(PAGE_SIZE);
-
-  const snapshots = useSnapshots(id, { limit, changedOnly });
+  const snapshots = useSnapshots(id, changedOnly);
   const competitor = useCompetitor(id).data;
   const state = competitor ? competitorState(competitor) : null;
 
   const notTracked = snapshots.error instanceof ApiError && snapshots.error.status === 404;
-  const list = snapshots.data;
-  const mayHaveMore = list !== undefined && list.length >= limit && limit < MAX_SNAPSHOTS;
+  // The pages loaded so far, as one list.
+  const list = snapshots.data?.pages.flat();
 
   return (
     <>
@@ -85,16 +78,16 @@ export function TimelinePage() {
             </ol>
           )}
 
-          {mayHaveMore && (
+          {snapshots.hasNextPage && (
             <button
               className={`button ${styles.more}`}
               type="button"
-              disabled={snapshots.isPlaceholderData}
+              disabled={snapshots.isFetchingNextPage || snapshots.isPlaceholderData}
               onClick={() => {
-                setLimit((current) => Math.min(current + PAGE_SIZE, MAX_SNAPSHOTS));
+                void snapshots.fetchNextPage();
               }}
             >
-              {snapshots.isPlaceholderData ? "Loading…" : "Show older snapshots"}
+              {snapshots.isFetchingNextPage ? "Loading…" : "Show older snapshots"}
             </button>
           )}
         </section>

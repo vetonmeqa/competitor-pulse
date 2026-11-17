@@ -45,6 +45,8 @@ const competitorsQuery = z.object({
 
 const snapshotsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
+  /** The id of a snapshot. Only the snapshots older than it are returned. */
+  before: z.coerce.number().int().min(1).optional(),
   changedOnly: z
     .enum(["true", "false"])
     .default("false")
