@@ -447,7 +447,7 @@ Backend settings for this mode are in [backend/.env.example](backend/.env.exampl
 | --- | --- | --- |
 | `npm test` | `backend` | 192 unit tests. No database needed |
 | `npm run test:integration` | `backend` | 126 tests against PostgreSQL, in a separate `pulse_test` database |
-| `npm test` | `frontend` | 54 component and page tests against a stubbed API |
+| `npm test` | `frontend` | 68 component and page tests against a stubbed API |
 | `npm run typecheck`, `npm run lint` | both | Strict TypeScript and type-aware lint rules |
 | `npm run db:generate` | `backend` | Writes a new migration after a schema change |
 

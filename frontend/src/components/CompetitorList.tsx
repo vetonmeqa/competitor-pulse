@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { Link } from "react-router";
 import { useRemoveCompetitor } from "../api/hooks";
 import type { Competitor } from "../api/types";
 import { competitorState } from "../lib/labels";
 import { Badge } from "./Badge";
 import styles from "./CompetitorList.module.css";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { CopyButton } from "./CopyButton";
 import { Notice } from "./Notice";
 import { Timestamp } from "./Timestamp";
@@ -14,13 +16,9 @@ interface CompetitorListProps {
 
 export function CompetitorList({ competitors }: CompetitorListProps) {
   const removeCompetitor = useRemoveCompetitor();
-
-  function handleRemove(id: string) {
-    // Removing also deletes the history, which cannot be undone, so ask first.
-    if (window.confirm(`Stop tracking "${id}"? Its history will be deleted.`)) {
-      removeCompetitor.mutate(id);
-    }
-  }
+  // Removing also deletes the history, which cannot be undone, so ask first. This is the
+  // id being asked about, or null when no question is open.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   return (
     <>
@@ -69,7 +67,7 @@ export function CompetitorList({ competitors }: CompetitorListProps) {
                 className={`button button-danger ${styles.remove}`}
                 type="button"
                 onClick={() => {
-                  handleRemove(competitor.id);
+                  setConfirmingId(competitor.id);
                 }}
                 disabled={removing}
                 // Every row has a Remove button, so the name says which competitor it removes.
@@ -81,6 +79,25 @@ export function CompetitorList({ competitors }: CompetitorListProps) {
           );
         })}
       </ul>
+      {confirmingId !== null && (
+        <ConfirmDialog
+          title={
+            <>
+              Stop tracking <span className={styles.confirmId}>{confirmingId}</span>?
+            </>
+          }
+          confirmLabel="Remove"
+          onConfirm={() => {
+            removeCompetitor.mutate(confirmingId);
+            setConfirmingId(null);
+          }}
+          onCancel={() => {
+            setConfirmingId(null);
+          }}
+        >
+          Its history will be deleted. This cannot be undone.
+        </ConfirmDialog>
+      )}
     </>
   );
 }

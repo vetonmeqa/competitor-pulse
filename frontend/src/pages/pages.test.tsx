@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { competitor, mockApi, renderApp, snapshot, systemStatus } from "../test/helpers";
 
 const status = () => ({ body: systemStatus });
@@ -69,31 +69,46 @@ describe("competitor list", () => {
   });
 
   it("removes a competitor after confirmation", async () => {
+    const user = userEvent.setup();
     const requests = mockApi({
       "GET /status": status,
       "GET /competitors": () => ({ body: [competitor()] }),
       "DELETE /competitors/acme-crm": () => ({ status: 204 }),
     });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderApp("/");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Remove acme-crm" }));
+    await user.click(await screen.findByRole("button", { name: "Remove acme-crm" }));
 
-    expect(confirm).toHaveBeenCalledWith('Stop tracking "acme-crm"? Its history will be deleted.');
+    const dialog = screen.getByRole("dialog", { name: "Stop tracking acme-crm?" });
+    expect(dialog).toHaveAccessibleDescription(
+      "Its history will be deleted. This cannot be undone.",
+    );
+    // Nothing is deleted until the user confirms.
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
+
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(requests.some((request) => request.method === "DELETE")).toBe(true);
     });
   });
 
   it("does not remove anything when the user cancels", async () => {
+    const user = userEvent.setup();
     const requests = mockApi({
       "GET /status": status,
       "GET /competitors": () => ({ body: [competitor()] }),
     });
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     renderApp("/");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Remove acme-crm" }));
+    await user.click(await screen.findByRole("button", { name: "Remove acme-crm" }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }),
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "acme-crm" })).toBeInTheDocument();
     expect(requests.every((request) => request.method === "GET")).toBe(true);
   });
 
