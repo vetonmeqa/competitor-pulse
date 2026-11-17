@@ -11,7 +11,7 @@ describe("AddCompetitorForm", () => {
   it("adds a competitor and clears the field", async () => {
     const requests = mockApi({
       "POST /competitors": () => ({ status: 201, body: competitor() }),
-      "GET /competitors": () => ({ body: competitorPage([]) }),
+      "GET /competitors": () => competitorPage([]),
     });
     renderWithProviders(<AddCompetitorForm />);
 
@@ -32,7 +32,7 @@ describe("AddCompetitorForm", () => {
   it("confirms the add with a link to the new competitor, until the user types again", async () => {
     mockApi({
       "POST /competitors": () => ({ status: 201, body: competitor({ id: "orbit-hr" }) }),
-      "GET /competitors": () => ({ body: competitorPage([]) }),
+      "GET /competitors": () => competitorPage([]),
     });
     renderWithProviders(<AddCompetitorForm />);
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
@@ -56,7 +56,7 @@ describe("AddCompetitorForm", () => {
   it("submits with the Enter key", async () => {
     const requests = mockApi({
       "POST /competitors": () => ({ status: 201, body: competitor() }),
-      "GET /competitors": () => ({ body: competitorPage([]) }),
+      "GET /competitors": () => competitorPage([]),
     });
     renderWithProviders(<AddCompetitorForm />);
 

@@ -22,6 +22,11 @@ interface ErrorBody {
  * declared: both ends live in this repository and change together.
  */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await send(path, init)).body as T;
+}
+
+/** Calls the backend and returns the parsed body with the response headers. */
+async function send(path: string, init?: RequestInit): Promise<{ body: unknown; headers: Headers }> {
   const response = await fetch(`/api${path}`, init);
   const text = await response.text();
   const body: unknown = text === "" ? undefined : parseJson(text);
@@ -36,7 +41,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         : `The server answered with status ${response.status}.`,
     );
   }
-  return body as T;
+  return { body, headers: response.headers };
 }
 
 function parseJson(text: string): unknown {
@@ -60,7 +65,8 @@ export interface SnapshotQuery {
 }
 
 export const api = {
-  listCompetitors: (query: CompetitorQuery, signal?: AbortSignal) => {
+  /** The body is the plain array. The counts come in response headers. */
+  listCompetitors: async (query: CompetitorQuery, signal?: AbortSignal): Promise<CompetitorPage> => {
     const params = new URLSearchParams({
       page: String(query.page),
       pageSize: String(query.pageSize),
@@ -68,7 +74,15 @@ export const api = {
     if (query.search !== "") {
       params.set("q", query.search);
     }
-    return request<CompetitorPage>(`/competitors?${params}`, { signal: signal ?? null });
+    const { body, headers } = await send(`/competitors?${params}`, { signal: signal ?? null });
+    const count = (name: string) => Number(headers.get(name));
+    return {
+      items: body as Competitor[],
+      page: count("x-page"),
+      pageSize: count("x-page-size"),
+      total: count("x-total-count"),
+      totalTracked: count("x-total-tracked"),
+    };
   },
 
   getCompetitor: (id: string, signal?: AbortSignal) =>

@@ -22,7 +22,10 @@ export interface Competitor {
   changedInLast24h: boolean;
 }
 
-/** One page of the competitor list, with the counts the pager needs. */
+/**
+ * One page of the competitor list, with the counts the pager needs. The API sends the
+ * items as the response body and the counts as headers; the client puts them together.
+ */
 export interface CompetitorPage {
   items: Competitor[];
   /** The page returned. Lower than the page asked for when that one is past the end. */

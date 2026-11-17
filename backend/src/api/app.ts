@@ -4,12 +4,7 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import type { Db } from "../db/client.js";
 import { readWorkerReport } from "../worker-status.js";
-import {
-  type CompetitorPageDto,
-  type StatusDto,
-  toCompetitorDto,
-  toSnapshotDto,
-} from "./dto.js";
+import { type StatusDto, toCompetitorDto, toSnapshotDto } from "./dto.js";
 import {
   addCompetitor,
   competitorExists,
@@ -94,14 +89,13 @@ export function buildApp({ db, log, config }: AppOptions): FastifyInstance {
     const { pageSize, q } = query.data;
     const now = new Date();
     const result = await listCompetitors(db, { page: query.data.page, pageSize, search: q });
-    const body: CompetitorPageDto = {
-      items: result.rows.map(({ competitor, title }) => toCompetitorDto(competitor, title, now)),
-      page: result.page,
-      pageSize,
-      total: result.total,
-      totalTracked: result.totalTracked,
-    };
-    return body;
+    // The body is the plain array of the contract. What a pager needs goes in headers.
+    void reply
+      .header("x-page", result.page)
+      .header("x-page-size", pageSize)
+      .header("x-total-count", result.total)
+      .header("x-total-tracked", result.totalTracked);
+    return result.rows.map(({ competitor, title }) => toCompetitorDto(competitor, title, now));
   });
 
   app.get<IdParams>("/api/competitors/:id", async (request, reply) => {

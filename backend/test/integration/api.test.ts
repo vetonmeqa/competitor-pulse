@@ -2,12 +2,7 @@ import { eq } from "drizzle-orm";
 import { pino } from "pino";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/api/app.js";
-import type {
-  CompetitorDto,
-  CompetitorPageDto,
-  SnapshotDto,
-  StatusDto,
-} from "../../src/api/dto.js";
+import type { CompetitorDto, SnapshotDto, StatusDto } from "../../src/api/dto.js";
 import { llmUsage, workerStatus } from "../../src/db/schema.js";
 import type { Observation } from "../../src/domain/evaluate.js";
 import type { Listing } from "../../src/domain/listing.js";
@@ -32,8 +27,25 @@ const post = (payload?: object) =>
   app.inject({ method: "POST", url: "/api/competitors", ...(payload ? { payload } : {}) });
 const remove = (id: string) => app.inject({ method: "DELETE", url: `/api/competitors/${id}` });
 
-async function competitorPage(query = ""): Promise<CompetitorPageDto> {
-  return (await get(`/api/competitors${query}`)).json();
+/** A page of the list: the array in the body, and the counts from the response headers. */
+interface CompetitorPage {
+  items: CompetitorDto[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalTracked: number;
+}
+
+async function competitorPage(query = ""): Promise<CompetitorPage> {
+  const response = await get(`/api/competitors${query}`);
+  const header = (name: string) => Number(response.headers[name]);
+  return {
+    items: response.json(),
+    page: header("x-page"),
+    pageSize: header("x-page-size"),
+    total: header("x-total-count"),
+    totalTracked: header("x-total-tracked"),
+  };
 }
 
 /** The first page of the list, which holds everything in a test with a few competitors. */
@@ -204,13 +216,26 @@ describe("GET /api/competitors", () => {
 });
 
 describe("GET /api/competitors, paging", () => {
+  it("answers with the plain array of the contract, and the counts in headers", async () => {
+    await addCompetitor(db, ID);
+    const response = await get("/api/competitors");
+
+    expect(response.json()).toMatchObject([{ id: ID }]);
+    expect(response.headers).toMatchObject({
+      "x-page": "1",
+      "x-page-size": "25",
+      "x-total-count": "1",
+      "x-total-tracked": "1",
+    });
+  });
+
   /** c01 to c07, added out of order. */
   async function addSeven(): Promise<void> {
     for (const number of [5, 2, 7, 1, 4, 6, 3]) {
       await addCompetitor(db, `c0${number}`);
     }
   }
-  const ids = (page: CompetitorPageDto) => page.items.map((competitor) => competitor.id);
+  const ids = (page: CompetitorPage) => page.items.map((competitor) => competitor.id);
 
   it("returns one page at a time, by id, with the total", async () => {
     await addSeven();
@@ -271,7 +296,7 @@ describe("GET /api/competitors, search", () => {
   });
   const search = async (text: string, rest = "") =>
     competitorPage(`?q=${encodeURIComponent(text)}${rest}`);
-  const ids = (page: CompetitorPageDto) => page.items.map((competitor) => competitor.id);
+  const ids = (page: CompetitorPage) => page.items.map((competitor) => competitor.id);
 
   it("finds competitors whose id contains the text", async () => {
     const page = await search("acme");

@@ -16,12 +16,10 @@ describe("competitor list", () => {
   it("lists competitors and flags the ones that changed in the last 24 hours", async () => {
     mockApi({
       "GET /status": status,
-      "GET /competitors": () => ({
-        body: competitorPage([
+      "GET /competitors": () => competitorPage([
           competitor({ id: "acme-crm", changedInLast24h: true }),
           competitor({ id: "orbit-hr", title: "Orbit HR", changedInLast24h: false }),
         ]),
-      }),
     });
     renderApp("/");
 
@@ -40,12 +38,10 @@ describe("competitor list", () => {
     const user = userEvent.setup();
     mockApi({
       "GET /status": status,
-      "GET /competitors": () => ({
-        body: competitorPage([
+      "GET /competitors": () => competitorPage([
           competitor({ id: "acme-crm" }),
           competitor({ id: "orbit-hr", title: "Orbit HR" }),
         ]),
-      }),
     });
     renderApp("/");
 
@@ -58,7 +54,7 @@ describe("competitor list", () => {
   });
 
   it("says so when nothing is tracked", async () => {
-    mockApi({ "GET /status": status, "GET /competitors": () => ({ body: competitorPage([]) }) });
+    mockApi({ "GET /status": status, "GET /competitors": () => competitorPage([]) });
     renderApp("/");
     expect(await screen.findByText(/No competitors are tracked yet/)).toBeInTheDocument();
   });
@@ -82,7 +78,7 @@ describe("competitor list", () => {
     const user = userEvent.setup();
     const requests = mockApi({
       "GET /status": status,
-      "GET /competitors": () => ({ body: competitorPage([competitor()]) }),
+      "GET /competitors": () => competitorPage([competitor()]),
       "DELETE /competitors/acme-crm": () => ({ status: 204 }),
     });
     renderApp("/");
@@ -108,7 +104,7 @@ describe("competitor list", () => {
     const user = userEvent.setup();
     const requests = mockApi({
       "GET /status": status,
-      "GET /competitors": () => ({ body: competitorPage([competitor()]) }),
+      "GET /competitors": () => competitorPage([competitor()]),
     });
     renderApp("/");
 
@@ -123,7 +119,7 @@ describe("competitor list", () => {
   });
 
   it("shows the state of the backend in the footer", async () => {
-    mockApi({ "GET /status": status, "GET /competitors": () => ({ body: competitorPage([]) }) });
+    mockApi({ "GET /status": status, "GET /competitors": () => competitorPage([]) });
     renderApp("/");
 
     const footer = await screen.findByRole("list", { name: "System status" });
@@ -134,7 +130,7 @@ describe("competitor list", () => {
 
   it("warns in the footer when the worker stopped or the budget is used up", async () => {
     mockApi({
-      "GET /competitors": () => ({ body: competitorPage([]) }),
+      "GET /competitors": () => competitorPage([]),
       "GET /status": () => ({
         body: {
           ...systemStatus,
@@ -169,14 +165,12 @@ describe("competitor list, search and pages", () => {
         const matching = tracked.filter((candidate) => candidate.id.includes(q));
         const lastPage = Math.max(1, Math.ceil(matching.length / pageSize));
         const page = Math.min(Number(params.get("page")), lastPage);
-        return {
-          body: competitorPage(matching.slice((page - 1) * pageSize, page * pageSize), {
-            page,
-            pageSize,
-            total: matching.length,
-            totalTracked: tracked.length,
-          }),
-        };
+        return competitorPage(matching.slice((page - 1) * pageSize, page * pageSize), {
+          page,
+          pageSize,
+          total: matching.length,
+          totalTracked: tracked.length,
+        });
       },
     });
   }

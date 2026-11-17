@@ -12,7 +12,7 @@ export interface RecordedRequest {
   body: unknown;
 }
 
-type Reply = { status?: number; body?: unknown } | undefined;
+type Reply = { status?: number; body?: unknown; headers?: Record<string, string> } | undefined;
 type Handler = (request: RecordedRequest) => Reply;
 
 /**
@@ -40,7 +40,10 @@ export function mockApi(handlers: Record<string, Handler>) {
       const reply = handler(request) ?? {};
       const status = reply.status ?? 200;
       return Promise.resolve(
-        new Response(reply.body === undefined ? null : JSON.stringify(reply.body), { status }),
+        new Response(reply.body === undefined ? null : JSON.stringify(reply.body), {
+          status,
+          headers: reply.headers ?? {},
+        }),
       );
     }),
   );
@@ -88,18 +91,23 @@ export function competitor(overrides: Partial<Competitor> = {}): Competitor {
   };
 }
 
-/** A page of the list as the API returns it. By default the items are all there is. */
+/**
+ * A page of the list as the API answers it: the items as the body and the counts as
+ * headers. By default the items are all there is.
+ */
 export function competitorPage(
   items: Competitor[],
-  overrides: Partial<CompetitorPage> = {},
-): CompetitorPage {
+  counts: Partial<Omit<CompetitorPage, "items">> = {},
+) {
+  const { page = 1, pageSize = 25, total = items.length, totalTracked = items.length } = counts;
   return {
-    items,
-    page: 1,
-    pageSize: 25,
-    total: items.length,
-    totalTracked: items.length,
-    ...overrides,
+    body: items,
+    headers: {
+      "x-page": String(page),
+      "x-page-size": String(pageSize),
+      "x-total-count": String(total),
+      "x-total-tracked": String(totalTracked),
+    },
   };
 }
 

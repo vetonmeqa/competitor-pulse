@@ -331,10 +331,11 @@ confirmation first. A soft delete that keeps the 90 days would be the alternativ
 - **Search looks at every tracked competitor,** not at the rows on screen. It matches the
   id and the current title, in any letter case. `%` and `_` in the search text are plain
   characters.
-- **Each page carries the counts:** how many competitors match and how many are tracked,
-  for "12 of 6,000 competitors" and "Showing 26–50 of 312".
+- **The body stays the array of the brief's contract.** The counts travel in response
+  headers: how many competitors match and how many are tracked, for "12 of 6,000
+  competitors" and "Showing 26–50 of 312".
 - **A page past the end returns the last page.** That happens in normal use: the only
-  competitor on the last page is removed. The response says which page it is.
+  competitor on the last page is removed. The `X-Page` header says which page it is.
 - **The page and the search are in the URL,** so a view can be bookmarked and the back
   button works.
 - **The timeline reads its competitor from `GET /api/competitors/:id`,** because the
@@ -416,7 +417,7 @@ accessibility audit was run. `npm audit` reports findings in development tools o
 ## API
 
 ```
-GET    /api/competitors                      -> { items, page, pageSize, total, totalTracked }
+GET    /api/competitors                      -> [Competitor, ...]   one page, by id
 GET    /api/competitors/:id                  -> Competitor, or 404
 POST   /api/competitors      { "id": string } -> 201, or 409 if tracked, 400 if invalid
 DELETE /api/competitors/:id                  -> 204, or 404
@@ -426,9 +427,15 @@ GET    /api/health                           -> { "ok": true }
 ```
 
 `competitors` accepts `?page=` (from 1), `?pageSize=` (default 25, at most 100) and `?q=`,
-which keeps the competitors whose id or current title contains the text. `items` is sorted
-by id. `total` counts the competitors that match `q`, `totalTracked` counts all of them,
-and `page` is the page returned: the last one when the page asked for is past the end.
+which keeps the competitors whose id or current title contains the text. The counts are
+in response headers:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Total-Count` | Competitors that match `q` |
+| `X-Total-Tracked` | All tracked competitors |
+| `X-Page` | The page returned: the last one when the page asked for is past the end |
+| `X-Page-Size` | The page size used |
 
 `snapshots` accepts `?limit=` (default 100, at most 1000) and `?changedOnly=true`.
 
@@ -477,7 +484,7 @@ Backend settings for this mode are in [backend/.env.example](backend/.env.exampl
 | Command | Where | What it runs |
 | --- | --- | --- |
 | `npm test` | `backend` | 192 unit tests. No database needed |
-| `npm run test:integration` | `backend` | 147 tests against PostgreSQL, in a separate `pulse_test` database |
+| `npm run test:integration` | `backend` | 148 tests against PostgreSQL, in a separate `pulse_test` database |
 | `npm test` | `frontend` | 97 component and page tests against a stubbed API |
 | `npm run typecheck`, `npm run lint` | both | Strict TypeScript and type-aware lint rules |
 | `npm run db:generate` | `backend` | Writes a new migration after a schema change |
