@@ -26,6 +26,9 @@ const get = (url: string) => app.inject({ method: "GET", url });
 const post = (payload?: object) =>
   app.inject({ method: "POST", url: "/api/competitors", ...(payload ? { payload } : {}) });
 const remove = (id: string) => app.inject({ method: "DELETE", url: `/api/competitors/${id}` });
+const pause = (id: string) => app.inject({ method: "POST", url: `/api/competitors/${id}/pause` });
+const resume = (id: string) =>
+  app.inject({ method: "POST", url: `/api/competitors/${id}/resume` });
 
 /** A page of the list: the array in the body, and the counts from the response headers. */
 interface CompetitorPage {
@@ -378,6 +381,121 @@ describe("GET /api/competitors/:id", () => {
   });
 });
 
+describe("pausing and resuming a competitor", () => {
+  beforeEach(async () => {
+    await addCompetitor(db, ID);
+    await record([ok(A), ok(B)]);
+  });
+
+  it("is not paused to begin with", async () => {
+    expect(await listCompetitors()).toMatchObject([{ id: ID, pausedAt: null }]);
+  });
+
+  it("pauses: the competitor is returned as paused and is no longer polled", async () => {
+    const response = await pause(ID);
+    expect(response.statusCode).toBe(200);
+    const body: CompetitorDto = response.json();
+    expect(body).toMatchObject({ id: ID, title: "Acme CRM", availability: "listed" });
+    expect(Date.parse(String(body.pausedAt))).toBeGreaterThan(Date.now() - 5000);
+
+    await store.requeueAtFront(ID);
+    expect(await store.claimNextDue(900)).toBeNull();
+  });
+
+  it("keeps the history of a paused competitor", async () => {
+    await pause(ID);
+    expect(await listSnapshots()).toHaveLength(2);
+    expect(await listCompetitors()).toMatchObject([{ id: ID, changedInLast24h: true }]);
+  });
+
+  it("keeps the time of the first pause when paused again", async () => {
+    const first: CompetitorDto = (await pause(ID)).json();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second: CompetitorDto = (await pause(ID)).json();
+    expect(second.pausedAt).toBe(first.pausedAt);
+  });
+
+  it("resumes: the competitor is polled first, ahead of ones that are overdue", async () => {
+    await addCompetitor(db, "an-hour-late", minutesAgo(60));
+    await pause(ID);
+
+    const response = await resume(ID);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: ID, pausedAt: null });
+    expect(await store.claimNextDue(900)).toBe(ID);
+    expect(await store.claimNextDue(900)).toBe("an-hour-late");
+  });
+
+  it("leaves the schedule alone when resuming a competitor that is not paused", async () => {
+    // The two recorded polls did not claim it, so claim it now: it is due in 15 minutes.
+    await store.claimNextDue(900);
+
+    const response = await resume(ID);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: ID, pausedAt: null });
+    // Not moved to the head of the queue.
+    expect(await store.claimNextDue(900)).toBeNull();
+  });
+
+  it.each([
+    ["pause", pause],
+    ["resume", resume],
+  ])("answers 404 on %s for a competitor that is not tracked", async (_name, act) => {
+    const response = await act("nope");
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: "not_tracked" } });
+  });
+});
+
+describe("GET /api/competitors, active only", () => {
+  beforeEach(async () => {
+    for (const id of ["acme-crm", "acme-payroll", "orbit-hr", "north-analytics"]) {
+      await addCompetitor(db, id);
+    }
+    await pause("acme-payroll");
+    await pause("orbit-hr");
+  });
+  const ids = (page: CompetitorPage) => page.items.map((competitor) => competitor.id);
+
+  it("returns paused and active competitors by default", async () => {
+    const page = await competitorPage();
+    expect(ids(page)).toEqual(["acme-crm", "acme-payroll", "north-analytics", "orbit-hr"]);
+    expect(page).toMatchObject({ total: 4, totalTracked: 4 });
+  });
+
+  it("leaves out the paused ones when asked, and counts only the active", async () => {
+    const page = await competitorPage("?activeOnly=true");
+    expect(ids(page)).toEqual(["acme-crm", "north-analytics"]);
+    expect(page.items.every((competitor) => competitor.pausedAt === null)).toBe(true);
+    expect(page).toMatchObject({ total: 2, totalTracked: 4 });
+  });
+
+  it("works together with the search and the paging", async () => {
+    const searched = await competitorPage("?activeOnly=true&q=acme");
+    expect(ids(searched)).toEqual(["acme-crm"]);
+    expect(searched).toMatchObject({ total: 1, totalTracked: 4 });
+
+    const second = await competitorPage("?activeOnly=true&pageSize=1&page=2");
+    expect(ids(second)).toEqual(["north-analytics"]);
+    expect(second).toMatchObject({ page: 2, total: 2 });
+  });
+
+  it("shows a competitor again once it is resumed", async () => {
+    await resume("orbit-hr");
+    expect(ids(await competitorPage("?activeOnly=true"))).toEqual([
+      "acme-crm",
+      "north-analytics",
+      "orbit-hr",
+    ]);
+  });
+
+  it("rejects a value that is not true or false", async () => {
+    const response = await get("/api/competitors?activeOnly=yes");
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: "invalid_query" } });
+  });
+});
+
 describe("DELETE /api/competitors/:id", () => {
   it("stops tracking, deletes the history and answers 204 with no body", async () => {
     await addCompetitor(db, ID);
@@ -667,10 +785,27 @@ describe("GET /api/status", () => {
     const response = await get("/api/status");
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
-      polling: { competitors: 0, intervalSeconds: 900, overdue: 0, oldestOverdueSeconds: null },
+      polling: {
+        competitors: 0,
+        paused: 0,
+        intervalSeconds: 900,
+        overdue: 0,
+        oldestOverdueSeconds: null,
+      },
       summaries: { pending: 0, llmCallsToday: 0, llmDailyCap: 2000 },
       worker: null,
     });
+  });
+
+  it("counts paused competitors, and never as overdue", async () => {
+    await addCompetitor(db, "two-minutes-late", minutesAgo(2));
+    await addCompetitor(db, "paused-an-hour-late", minutesAgo(60));
+    await pause("paused-an-hour-late");
+
+    const { polling } = await getStatus();
+    expect(polling).toMatchObject({ competitors: 2, paused: 1, overdue: 1 });
+    // The paused one is an hour behind, and that is not a delay.
+    expect(polling.oldestOverdueSeconds).toBeLessThan(130);
   });
 
   it("reports how far behind the poll queue is", async () => {

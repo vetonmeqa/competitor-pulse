@@ -60,6 +60,18 @@ describe("claimNextDue", () => {
     expect(await store.claimNextDue(900)).toBeNull();
   });
 
+  it("never takes a paused competitor, however overdue it is", async () => {
+    await addCompetitor(db, "paused-and-very-late", minutesAgo(60));
+    await addCompetitor(db, "a-little-late", minutesAgo(3));
+    await db
+      .update(competitors)
+      .set({ pausedAt: new Date() })
+      .where(eq(competitors.id, "paused-and-very-late"));
+
+    expect(await store.claimNextDue(900)).toBe("a-little-late");
+    expect(await store.claimNextDue(900)).toBeNull();
+  });
+
   it("reschedules the claimed competitor one interval ahead", async () => {
     await addCompetitor(db, ID);
     await store.claimNextDue(900);

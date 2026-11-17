@@ -20,6 +20,8 @@ export interface Competitor {
   lastPollStatus: PollStatus | null;
   lastChangedAt: string | null;
   changedInLast24h: boolean;
+  /** When tracking was paused, or null while the competitor is being polled. */
+  pausedAt: string | null;
 }
 
 /**
@@ -31,7 +33,7 @@ export interface CompetitorPage {
   /** The page returned. Lower than the page asked for when that one is past the end. */
   page: number;
   pageSize: number;
-  /** How many competitors match the search. Equal to `totalTracked` without a search. */
+  /** How many competitors match the search and the filter. */
   total: number;
   /** How many competitors are tracked in all. */
   totalTracked: number;
@@ -73,6 +75,8 @@ export interface SystemStatus {
   now: string;
   polling: {
     competitors: number;
+    /** Competitors whose tracking is paused. */
+    paused: number;
     intervalSeconds: number;
     overdue: number;
     oldestOverdueSeconds: number | null;

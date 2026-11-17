@@ -24,8 +24,9 @@ function describe(status: SystemStatus): Item[] {
     items.push({ text: "Worker running", tone: "ok" });
   }
 
+  const paused = polling.paused > 0 ? ` (${count.format(polling.paused)} paused)` : "";
   items.push({
-    text: `${count.format(polling.competitors)} tracked, polled every ${formatDuration(polling.intervalSeconds)}`,
+    text: `${count.format(polling.competitors)} tracked${paused}, polled every ${formatDuration(polling.intervalSeconds)}`,
   });
   if (polling.oldestOverdueSeconds !== null && polling.oldestOverdueSeconds > 60) {
     items.push({

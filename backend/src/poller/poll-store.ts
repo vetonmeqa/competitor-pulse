@@ -1,4 +1,4 @@
-import { asc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import type { Db, Tx } from "../db/client.js";
 import { competitors, listingVersions, type NewSnapshotRow, snapshots } from "../db/schema.js";
 import {
@@ -25,6 +25,7 @@ export class PollStore {
 
   /**
    * Takes the most overdue competitor off the queue, or returns null when none is due.
+   * A paused competitor is never due.
    *
    * Claiming pushes `next_poll_at` one interval ahead straight away. That acts as a
    * lease: if the worker dies mid-poll, the competitor is simply due again one interval
@@ -36,7 +37,7 @@ export class PollStore {
       const [due] = await tx
         .select({ id: competitors.id })
         .from(competitors)
-        .where(lte(competitors.nextPollAt, sql`now()`))
+        .where(and(lte(competitors.nextPollAt, sql`now()`), isNull(competitors.pausedAt)))
         .orderBy(asc(competitors.nextPollAt))
         .limit(1)
         .for("update", { skipLocked: true });

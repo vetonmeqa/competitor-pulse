@@ -45,6 +45,8 @@ export const competitors = pgTable(
 
     // The schedule. The poller always takes the row with the oldest next_poll_at.
     nextPollAt: timestamptz("next_poll_at").notNull().defaultNow(),
+    // Set while tracking is paused. A paused competitor keeps its history and is not polled.
+    pausedAt: timestamptz("paused_at"),
 
     // Current state, which every new poll is compared against.
     availability: availability("availability").notNull().default("unknown"),
@@ -62,7 +64,13 @@ export const competitors = pgTable(
     lastPollStatus: pollStatus("last_poll_status"),
     lastChangedAt: timestamptz("last_changed_at"),
   },
-  (t) => [index("competitors_next_poll_at_idx").on(t.nextPollAt)],
+  (t) => [
+    // The poll queue. Paused competitors are left out of it, so the poller never has to
+    // read past them to find the next one that is due.
+    index("competitors_next_poll_at_idx")
+      .on(t.nextPollAt)
+      .where(sql`${t.pausedAt} IS NULL`),
+  ],
 );
 
 /**

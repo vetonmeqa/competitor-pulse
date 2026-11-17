@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useRemoveCompetitor } from "../api/hooks";
+import { useRemoveCompetitor, useSetCompetitorPaused } from "../api/hooks";
 import type { Competitor } from "../api/types";
 import { competitorState } from "../lib/labels";
 import { Badge } from "./Badge";
@@ -16,6 +16,7 @@ interface CompetitorListProps {
 
 export function CompetitorList({ competitors }: CompetitorListProps) {
   const removeCompetitor = useRemoveCompetitor();
+  const setPaused = useSetCompetitorPaused();
   // Removing also deletes the history, which cannot be undone, so ask first. This is the
   // id being asked about, or null when no question is open.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -27,10 +28,18 @@ export function CompetitorList({ competitors }: CompetitorListProps) {
           Could not remove the competitor: {removeCompetitor.error.message}
         </Notice>
       )}
+      {setPaused.isError && (
+        <Notice tone="danger" role="alert">
+          Could not {setPaused.variables.paused ? "pause" : "resume"} {setPaused.variables.id}:{" "}
+          {setPaused.error.message}
+        </Notice>
+      )}
       <ul className={styles.list}>
         {competitors.map((competitor) => {
           const state = competitorState(competitor);
+          const paused = competitor.pausedAt !== null;
           const removing = removeCompetitor.isPending && removeCompetitor.variables === competitor.id;
+          const changingPause = setPaused.isPending && setPaused.variables.id === competitor.id;
           return (
             <li key={competitor.id} className={styles.item}>
               <div className={styles.identity}>
@@ -50,11 +59,16 @@ export function CompetitorList({ competitors }: CompetitorListProps) {
 
               <div className={styles.badges}>
                 <Badge tone={state.tone}>{state.text}</Badge>
+                {paused && <Badge tone="neutral">Paused</Badge>}
                 {competitor.changedInLast24h && <Badge tone="info">Changed in last 24 h</Badge>}
               </div>
 
               <p className={styles.polled}>
-                {competitor.lastPolledAt === null ? (
+                {competitor.pausedAt !== null ? (
+                  <>
+                    Paused <Timestamp iso={competitor.pausedAt} format="relative" />
+                  </>
+                ) : competitor.lastPolledAt === null ? (
                   "Not polled yet"
                 ) : (
                   <>
@@ -63,18 +77,32 @@ export function CompetitorList({ competitors }: CompetitorListProps) {
                 )}
               </p>
 
-              <button
-                className={`button button-danger ${styles.remove}`}
-                type="button"
-                onClick={() => {
-                  setConfirmingId(competitor.id);
-                }}
-                disabled={removing}
-                // Every row has a Remove button, so the name says which competitor it removes.
-                aria-label={`Remove ${competitor.id}`}
-              >
-                {removing ? "Removing…" : "Remove"}
-              </button>
+              <div className={styles.actions}>
+                {/* Pausing keeps the history and can be undone, so it does not ask first. */}
+                <button
+                  className={`button ${styles.pause}`}
+                  type="button"
+                  onClick={() => {
+                    setPaused.mutate({ id: competitor.id, paused: !paused });
+                  }}
+                  disabled={changingPause}
+                  // Every row has these buttons, so the name says which competitor it is for.
+                  aria-label={`${paused ? "Resume" : "Pause"} ${competitor.id}`}
+                >
+                  {paused ? "Resume" : "Pause"}
+                </button>
+                <button
+                  className="button button-danger"
+                  type="button"
+                  onClick={() => {
+                    setConfirmingId(competitor.id);
+                  }}
+                  disabled={removing}
+                  aria-label={`Remove ${competitor.id}`}
+                >
+                  {removing ? "Removing…" : "Remove"}
+                </button>
+              </div>
             </li>
           );
         })}
@@ -95,7 +123,8 @@ export function CompetitorList({ competitors }: CompetitorListProps) {
             setConfirmingId(null);
           }}
         >
-          Its history will be deleted. This cannot be undone.
+          Its history will be deleted. This cannot be undone. To keep the history, pause it
+          instead.
         </ConfirmDialog>
       )}
     </>

@@ -57,6 +57,8 @@ export interface CompetitorQuery {
   pageSize: number;
   /** Text to find in the id or the title. Empty for no search. */
   search: string;
+  /** Leaves out the competitors whose tracking is paused. */
+  activeOnly: boolean;
 }
 
 export interface SnapshotQuery {
@@ -75,6 +77,9 @@ export const api = {
     });
     if (query.search !== "") {
       params.set("q", query.search);
+    }
+    if (query.activeOnly) {
+      params.set("activeOnly", "true");
     }
     const { body, headers } = await send(`/competitors?${params}`, { signal: signal ?? null });
     const count = (name: string) => Number(headers.get(name));
@@ -96,6 +101,13 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id }),
     }),
+
+  /** Stops the polling and keeps the history. Returns the competitor as it is now. */
+  pauseCompetitor: (id: string) =>
+    request<Competitor>(`/competitors/${encodeURIComponent(id)}/pause`, { method: "POST" }),
+
+  resumeCompetitor: (id: string) =>
+    request<Competitor>(`/competitors/${encodeURIComponent(id)}/resume`, { method: "POST" }),
 
   removeCompetitor: (id: string) =>
     request<undefined>(`/competitors/${encodeURIComponent(id)}`, { method: "DELETE" }),

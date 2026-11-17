@@ -87,6 +87,7 @@ export function competitor(overrides: Partial<Competitor> = {}): Competitor {
     lastPollStatus: "ok",
     lastChangedAt: null,
     changedInLast24h: false,
+    pausedAt: null,
     ...overrides,
   };
 }
@@ -137,7 +138,13 @@ export function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 
 export const systemStatus: SystemStatus = {
   now: "2026-09-10T12:00:00.000Z",
-  polling: { competitors: 2, intervalSeconds: 900, overdue: 0, oldestOverdueSeconds: null },
+  polling: {
+    competitors: 2,
+    paused: 0,
+    intervalSeconds: 900,
+    overdue: 0,
+    oldestOverdueSeconds: null,
+  },
   summaries: { pending: 0, llmCallsToday: 12, llmDailyCap: 2000 },
   worker: {
     running: true,

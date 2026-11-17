@@ -87,7 +87,7 @@ describe("competitor list", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Stop tracking acme-crm?" });
     expect(dialog).toHaveAccessibleDescription(
-      "Its history will be deleted. This cannot be undone.",
+      "Its history will be deleted. This cannot be undone. To keep the history, pause it instead.",
     );
     // Nothing is deleted until the user confirms.
     expect(requests.every((request) => request.method === "GET")).toBe(true);
@@ -333,6 +333,156 @@ describe("competitor list, search and pages", () => {
   });
 });
 
+describe("competitor list, pausing and the active filter", () => {
+  const IDS = ["acme-crm", "lumen-docs", "orbit-hr"];
+  const notPaused: string[] = [];
+
+  /** A small API that remembers which competitors are paused, and filters like the real one. */
+  function pausableApi(pausedAtStart = notPaused) {
+    const paused = new Set(pausedAtStart);
+    const view = (id: string) =>
+      competitor({ id, pausedAt: paused.has(id) ? "2026-09-10T11:00:00.000Z" : null });
+    const act = (id: string, pause: boolean) => () => {
+      if (pause) {
+        paused.add(id);
+      } else {
+        paused.delete(id);
+      }
+      return { body: view(id) };
+    };
+    return mockApi({
+      "GET /status": () => ({
+        body: {
+          ...systemStatus,
+          polling: { ...systemStatus.polling, competitors: IDS.length, paused: paused.size },
+        },
+      }),
+      "GET /competitors": (request) => {
+        const params = new URLSearchParams(request.path.split("?")[1]);
+        const activeOnly = params.get("activeOnly") === "true";
+        const shown = IDS.filter(
+          (id) => id.includes(params.get("q") ?? "") && !(activeOnly && paused.has(id)),
+        );
+        return competitorPage(shown.map(view), { total: shown.length, totalTracked: IDS.length });
+      },
+      ...Object.fromEntries(
+        IDS.flatMap((id) => [
+          [`POST /competitors/${id}/pause`, act(id, true)],
+          [`POST /competitors/${id}/resume`, act(id, false)],
+        ]),
+      ),
+    });
+  }
+  const row = (id: string) => screen.getByRole("link", { name: id }).closest("li") as HTMLElement;
+  const shownIds = () =>
+    screen.getAllByRole("button", { name: /^Remove / }).map((button) => button.textContent);
+  const filter = () => screen.getByRole("checkbox", { name: "Only show active" });
+
+  it("pauses a competitor from its row, without asking first", async () => {
+    const user = userEvent.setup();
+    const requests = pausableApi();
+    renderApp("/");
+    await screen.findByRole("link", { name: "orbit-hr" });
+    expect(row("orbit-hr")).not.toHaveTextContent("Paused");
+
+    await user.click(screen.getByRole("button", { name: "Pause orbit-hr" }));
+
+    expect(await screen.findByRole("button", { name: "Resume orbit-hr" })).toBeInTheDocument();
+    expect(row("orbit-hr")).toHaveTextContent("Paused");
+    expect(row("acme-crm")).not.toHaveTextContent("Paused");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.method === "POST")).toMatchObject([
+      { path: "/competitors/orbit-hr/pause" },
+    ]);
+    // The footer counts it.
+    expect(await screen.findByText(/3 tracked \(1 paused\)/)).toBeInTheDocument();
+  });
+
+  it("resumes a paused competitor", async () => {
+    const user = userEvent.setup();
+    const requests = pausableApi(["orbit-hr"]);
+    renderApp("/");
+
+    await user.click(await screen.findByRole("button", { name: "Resume orbit-hr" }));
+
+    expect(await screen.findByRole("button", { name: "Pause orbit-hr" })).toBeInTheDocument();
+    expect(row("orbit-hr")).not.toHaveTextContent("Paused");
+    expect(requests.filter((request) => request.method === "POST")).toMatchObject([
+      { path: "/competitors/orbit-hr/resume" },
+    ]);
+  });
+
+  it("says so when pausing fails", async () => {
+    const user = userEvent.setup();
+    mockApi({
+      "GET /status": status,
+      "GET /competitors": () => competitorPage([competitor()]),
+      "POST /competitors/acme-crm/pause": () => ({
+        status: 500,
+        body: { error: { code: "internal_error", message: "Something went wrong." } },
+      }),
+    });
+    renderApp("/");
+
+    await user.click(await screen.findByRole("button", { name: "Pause acme-crm" }));
+    expect(
+      await screen.findByText("Could not pause acme-crm: Something went wrong."),
+    ).toBeInTheDocument();
+  });
+
+  it("asks the server for active competitors only when the filter is on", async () => {
+    const user = userEvent.setup();
+    const requests = pausableApi(["lumen-docs"]);
+    const router = renderApp("/");
+    await screen.findByRole("link", { name: "lumen-docs" });
+    expect(screen.getByText("3 competitors")).toBeInTheDocument();
+
+    await user.click(filter());
+
+    expect(await screen.findByText("2 of 3 competitors")).toBeInTheDocument();
+    expect(shownIds()).toHaveLength(2);
+    expect(screen.queryByRole("link", { name: "lumen-docs" })).not.toBeInTheDocument();
+    expect(requests.at(-1)?.path).toBe("/competitors?page=1&pageSize=25&activeOnly=true");
+    expect(router.state.location.search).toBe("?show=active");
+  });
+
+  it("opens with the filter in the address, and keeps it together with a search", async () => {
+    const requests = pausableApi(["orbit-hr"]);
+    renderApp("/?q=o&show=active");
+
+    expect(await screen.findByRole("checkbox", { name: "Only show active" })).toBeChecked();
+    // "o" is in lumen-docs and orbit-hr, and orbit-hr is paused.
+    expect(await screen.findByText("1 of 3 competitors")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "lumen-docs" })).toBeInTheDocument();
+    expect(requests.find((request) => request.path.startsWith("/competitors?"))?.path).toBe(
+      "/competitors?page=1&pageSize=25&q=o&activeOnly=true",
+    );
+  });
+
+  it("drops a competitor from the active view as soon as it is paused", async () => {
+    const user = userEvent.setup();
+    pausableApi();
+    renderApp("/?show=active");
+
+    await user.click(await screen.findByRole("button", { name: "Pause acme-crm" }));
+    expect(await screen.findByText("2 of 3 competitors")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "acme-crm" })).not.toBeInTheDocument();
+  });
+
+  it("says so when every competitor is paused, with a way back to all of them", async () => {
+    const user = userEvent.setup();
+    pausableApi(IDS);
+    renderApp("/?show=active");
+
+    expect(await screen.findByText(/No competitor is active/)).toBeInTheDocument();
+    expect(screen.getByText("0 of 3 competitors")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Show all competitors" }));
+    expect(await screen.findByText("3 competitors")).toBeInTheDocument();
+    expect(filter()).not.toBeChecked();
+  });
+});
+
 describe("competitor timeline", () => {
   const history = [
     snapshot({
@@ -373,6 +523,23 @@ describe("competitor timeline", () => {
     expect(state.closest("p")).toHaveTextContent("Acme CRM");
     // It asks for this one competitor, not for the list, which is paged.
     expect(requests.map((request) => request.path)).not.toContain("/competitors");
+  });
+
+  it("says when tracking is paused", async () => {
+    mockApi({
+      "GET /status": status,
+      "GET /competitors/acme-crm": () => ({
+        body: competitor({ pausedAt: "2026-09-10T11:00:00.000Z" }),
+      }),
+      "GET /competitors/acme-crm/snapshots": () => ({ body: history }),
+    });
+    renderApp("/competitors/acme-crm");
+
+    expect(await screen.findByText(/Tracking was paused/)).toHaveTextContent(
+      "No new snapshots are recorded until it is resumed from the list.",
+    );
+    // The history is still there.
+    expect(screen.getAllByRole("article")).toHaveLength(3);
   });
 
   it("shows the snapshots in the order the API returns them, newest first", async () => {

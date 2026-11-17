@@ -1,4 +1,18 @@
-import { and, asc, count, desc, eq, gt, ilike, lte, min, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  ilike,
+  isNotNull,
+  isNull,
+  lte,
+  min,
+  or,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "../db/client.js";
 import {
@@ -20,7 +34,7 @@ export interface CompetitorWithTitle {
 
 export interface CompetitorPage {
   rows: CompetitorWithTitle[];
-  /** How many competitors match the search. Equal to `totalTracked` without a search. */
+  /** How many competitors match the search and the filter. */
   total: number;
   /** How many competitors are tracked in all. */
   totalTracked: number;
@@ -33,7 +47,8 @@ const escapeLike = (text: string): string => text.replace(/[\\%_]/g, "\\$&");
 
 /**
  * One page of competitors, by id. `search` keeps those whose id or current title contains
- * the text, in any letter case. An empty search keeps all.
+ * the text, in any letter case. An empty search keeps all. `activeOnly` leaves out the
+ * paused ones.
  *
  * A page past the end gives the last page. That happens in normal use, for example when
  * the only competitor on the last page is removed, and the caller then needs no second
@@ -41,13 +56,16 @@ const escapeLike = (text: string): string => text.replace(/[\\%_]/g, "\\$&");
  */
 export async function listCompetitors(
   db: Db,
-  options: { page: number; pageSize: number; search: string },
+  options: { page: number; pageSize: number; search: string; activeOnly: boolean },
 ): Promise<CompetitorPage> {
   const pattern = `%${escapeLike(options.search)}%`;
-  const matches =
+  // Undefined when there is nothing to filter on, which keeps every competitor.
+  const matches = and(
     options.search === ""
       ? undefined
-      : or(ilike(competitors.id, pattern), ilike(listingVersions.title, pattern));
+      : or(ilike(competitors.id, pattern), ilike(listingVersions.title, pattern)),
+    options.activeOnly ? isNull(competitors.pausedAt) : undefined,
+  );
   const currentVersion = eq(listingVersions.id, competitors.currentVersionId);
 
   const [totalTracked, matching] = await Promise.all([
@@ -100,6 +118,38 @@ export async function addCompetitor(db: Db, id: string): Promise<CompetitorRow |
     .onConflictDoNothing()
     .returning();
   return row ?? null;
+}
+
+/**
+ * Pauses the tracking of a competitor: it keeps its history and is no longer polled.
+ * Returns false when it is not tracked. Pausing one that is already paused changes
+ * nothing, so the time it was first paused is kept.
+ */
+export async function pauseCompetitor(db: Db, id: string): Promise<boolean> {
+  const updated = await db
+    .update(competitors)
+    .set({ pausedAt: sql`coalesce(${competitors.pausedAt}, now())` })
+    .where(eq(competitors.id, id))
+    .returning({ id: competitors.id });
+  return updated.length > 0;
+}
+
+/**
+ * Resumes the tracking of a paused competitor and puts it at the head of the poll queue,
+ * so it is polled again within about a second. Returns false when it is not tracked.
+ * Resuming one that is not paused changes nothing: it keeps its place in the queue.
+ */
+export async function resumeCompetitor(db: Db, id: string): Promise<boolean> {
+  // The column names on the right of a SET are the values before the update.
+  const updated = await db
+    .update(competitors)
+    .set({
+      pausedAt: null,
+      nextPollAt: sql`case when ${competitors.pausedAt} is null then ${competitors.nextPollAt} else to_timestamp(0) end`,
+    })
+    .where(eq(competitors.id, id))
+    .returning({ id: competitors.id });
+  return updated.length > 0;
 }
 
 /** Stops tracking a competitor and deletes its history. Returns false when it was not tracked. */
@@ -162,6 +212,8 @@ function olderThan(db: Db, competitorId: string, cursorId: number) {
 
 export interface QueueCounts {
   competitors: number;
+  /** Competitors whose tracking is paused. They are not polled and never overdue. */
+  paused: number;
   /** Competitors whose next poll time has passed. */
   overdue: number;
   /** How far behind schedule the most overdue competitor is, or null when none is. */
@@ -171,14 +223,18 @@ export interface QueueCounts {
 }
 
 export async function getQueueCounts(db: Db, now: Date): Promise<QueueCounts> {
-  const [total, overdue, oldest, pendingSummaries, usage] = await Promise.all([
+  const active = isNull(competitors.pausedAt);
+  const [total, paused, overdue, oldest, pendingSummaries, usage] = await Promise.all([
     db.$count(competitors),
-    db.$count(competitors, lte(competitors.nextPollAt, now)),
+    db.$count(competitors, isNotNull(competitors.pausedAt)),
+    db.$count(competitors, and(active, lte(competitors.nextPollAt, now))),
     // Skips the "distant past" marker used to put a competitor at the head of the queue.
     db
       .select({ nextPollAt: min(competitors.nextPollAt) })
       .from(competitors)
-      .where(and(lte(competitors.nextPollAt, now), gt(competitors.nextPollAt, new Date(0)))),
+      .where(
+        and(active, lte(competitors.nextPollAt, now), gt(competitors.nextPollAt, new Date(0))),
+      ),
     db.$count(snapshots, eq(snapshots.summaryStatus, "pending")),
     db
       .select({ calls: llmUsage.calls })
@@ -189,6 +245,7 @@ export async function getQueueCounts(db: Db, now: Date): Promise<QueueCounts> {
   const oldestDue = oldest[0]?.nextPollAt ?? null;
   return {
     competitors: total,
+    paused,
     overdue,
     oldestOverdueSeconds:
       oldestDue === null ? null : Math.round((now.getTime() - oldestDue.getTime()) / 1000),

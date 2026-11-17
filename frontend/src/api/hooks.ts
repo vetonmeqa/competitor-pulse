@@ -84,6 +84,21 @@ export function useAddCompetitor() {
   });
 }
 
+/** Pauses or resumes the tracking of one competitor. */
+export function useSetCompetitorPaused() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, paused }: { id: string; paused: boolean }) =>
+      paused ? api.pauseCompetitor(id) : api.resumeCompetitor(id),
+    // The footer counts the paused competitors, so it is refreshed as well.
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.competitors }),
+        queryClient.invalidateQueries({ queryKey: keys.status }),
+      ]),
+  });
+}
+
 export function useRemoveCompetitor() {
   const queryClient = useQueryClient();
   return useMutation({

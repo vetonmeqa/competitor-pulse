@@ -4,6 +4,7 @@ import { useCompetitor, useSnapshots } from "../api/hooks";
 import { Badge } from "../components/Badge";
 import { Notice } from "../components/Notice";
 import { SnapshotCard } from "../components/SnapshotCard";
+import { Timestamp } from "../components/Timestamp";
 import { competitorState } from "../lib/labels";
 import styles from "./pages.module.css";
 
@@ -32,9 +33,17 @@ export function TimelinePage() {
           <p className={styles.subtitle}>
             {competitor.title !== null && <span>{competitor.title}</span>}
             <Badge tone={state.tone}>{state.text}</Badge>
+            {competitor.pausedAt !== null && <Badge tone="neutral">Paused</Badge>}
           </p>
         )}
       </div>
+
+      {competitor !== undefined && competitor.pausedAt !== null && (
+        <Notice tone="warn">
+          Tracking was paused <Timestamp iso={competitor.pausedAt} format="relative" />. No new
+          snapshots are recorded until it is resumed from <Link to="/">the list</Link>.
+        </Notice>
+      )}
 
       {notTracked ? (
         <Notice tone="warn" role="alert">

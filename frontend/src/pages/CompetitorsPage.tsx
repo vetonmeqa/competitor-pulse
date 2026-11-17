@@ -12,11 +12,21 @@ import styles from "./pages.module.css";
 
 const PAGE_SIZE = 25;
 
-/** The address of a page of a search, leaving out whatever has its default value. */
-function listAddress(search: string, page: number): { search: string } {
+/** What the list is showing: a search, a filter and a page. */
+interface ListView {
+  search: string;
+  activeOnly: boolean;
+  page: number;
+}
+
+/** The address of a view of the list, leaving out whatever has its default value. */
+function listAddress({ search, activeOnly, page }: ListView): { search: string } {
   const params = new URLSearchParams();
   if (search !== "") {
     params.set("q", search);
+  }
+  if (activeOnly) {
+    params.set("show", "active");
   }
   if (page > 1) {
     params.set("page", String(page));
@@ -25,14 +35,16 @@ function listAddress(search: string, page: number): { search: string } {
 }
 
 export function CompetitorsPage() {
-  // The search and the page live in the URL, so a view can be bookmarked and shared, and
-  // the back button returns to the page before.
+  // The search, the filter and the page live in the URL, so a view can be bookmarked and
+  // shared, and the back button returns to the page before.
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get("q")?.trim() ?? "";
+  const activeOnly = searchParams.get("show") === "active";
   const competitors = useCompetitors({
     page: parsePage(searchParams.get("page")),
     pageSize: PAGE_SIZE,
     search,
+    activeOnly,
   });
   const { data, isPending, isError, error, isPlaceholderData } = competitors;
   const listTop = useRef<HTMLElement>(null);
@@ -41,7 +53,14 @@ export function CompetitorsPage() {
   // page past the end. Everything below goes by that page, not by the address.
   const pageCount = data ? pageCountFor(data.total, data.pageSize) : 1;
   const firstShown = data ? (data.page - 1) * data.pageSize + 1 : 0;
-  const nothingTracked = data?.totalTracked === 0 && search === "";
+  const nothingTracked = data?.totalTracked === 0;
+  const narrowed = search !== "" || activeOnly;
+
+  /** A change of the search or the filter starts at the first page of the new view. */
+  function show(view: Omit<ListView, "page">) {
+    // It replaces the address, so the back button does not walk through every word typed.
+    setSearchParams(listAddress({ ...view, page: 1 }).search, { replace: true });
+  }
 
   return (
     <>
@@ -61,19 +80,28 @@ export function CompetitorsPage() {
             <SearchField
               query={search}
               onQueryChange={(next) => {
-                // A new search starts at its first page. It replaces the address, so the
-                // back button does not walk through every word that was typed.
-                setSearchParams(listAddress(next, 1).search, { replace: true });
+                show({ search: next, activeOnly });
               }}
               label="Search competitors"
               placeholder="Search by id or name"
             />
-            {/* Announced by a screen reader when a search changes it. */}
+            {/* Done by the server like the search, so it covers every page. */}
+            <label className={styles.filter}>
+              <input
+                type="checkbox"
+                checked={activeOnly}
+                onChange={(event) => {
+                  show({ search, activeOnly: event.target.checked });
+                }}
+              />
+              Only show active
+            </label>
+            {/* Announced by a screen reader when a search or the filter changes it. */}
             <p className={styles.count} role="status">
               {data &&
-                (search === ""
-                  ? `${formatCount(data.total)} ${data.total === 1 ? "competitor" : "competitors"}`
-                  : `${formatCount(data.total)} of ${formatCount(data.totalTracked)} competitors`)}
+                (narrowed
+                  ? `${formatCount(data.total)} of ${formatCount(data.totalTracked)} competitors`
+                  : `${formatCount(data.total)} ${data.total === 1 ? "competitor" : "competitors"}`)}
             </p>
           </div>
         )}
@@ -88,17 +116,24 @@ export function CompetitorsPage() {
         {nothingTracked && (
           <Notice>No competitors are tracked yet. Add one above to get started.</Notice>
         )}
-        {data?.total === 0 && search !== "" && (
+        {data?.total === 0 && !nothingTracked && (
           <Notice>
-            No competitor matches “{search}”. The search looks at ids and names.{" "}
-            <Link to={listAddress("", 1)} replace>
-              Clear the search
+            {search === "" ? (
+              "No competitor is active. Tracking is paused for all of them."
+            ) : (
+              <>
+                No {activeOnly && "active "}competitor matches “{search}”. The search looks at ids
+                and names.
+              </>
+            )}{" "}
+            <Link to={listAddress({ search: "", activeOnly: false, page: 1 })} replace>
+              {activeOnly ? "Show all competitors" : "Clear the search"}
             </Link>
           </Notice>
         )}
 
         {data !== undefined && data.items.length > 0 && (
-          // Dimmed while another page or another search is on its way.
+          // Dimmed while another page, search or filter is on its way.
           <div className={styles.results} aria-busy={isPlaceholderData}>
             <CompetitorList competitors={data.items} />
           </div>
@@ -113,7 +148,7 @@ export function CompetitorsPage() {
             <Pager
               page={data.page}
               pageCount={pageCount}
-              to={(page) => listAddress(search, page)}
+              to={(page) => listAddress({ search, activeOnly, page })}
               onNavigate={() => {
                 // The pager is under the list. Bring the top of the new page into view.
                 const top = listTop.current;

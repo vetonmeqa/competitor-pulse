@@ -12,7 +12,9 @@ import {
   getQueueCounts,
   listCompetitors,
   listSnapshots,
+  pauseCompetitor,
   removeCompetitor,
+  resumeCompetitor,
 } from "./store.js";
 
 export interface AppOptions {
@@ -36,21 +38,26 @@ const competitorId = z
 
 const addCompetitorBody = z.object({ id: competitorId });
 
+/** A query flag that is on only when it is exactly "true". */
+const flag = z
+  .enum(["true", "false"])
+  .default("false")
+  .transform((value) => value === "true");
+
 const competitorsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   /** Search text. Matched against the id and the current title. */
   q: z.string().trim().max(100).default(""),
+  /** Leaves out the competitors whose tracking is paused. */
+  activeOnly: flag,
 });
 
 const snapshotsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
   /** The id of a snapshot. Only the snapshots older than it are returned. */
   before: z.coerce.number().int().min(1).optional(),
-  changedOnly: z
-    .enum(["true", "false"])
-    .default("false")
-    .transform((value) => value === "true"),
+  changedOnly: flag,
 });
 
 interface IdParams {
@@ -88,9 +95,14 @@ export function buildApp({ db, log, config }: AppOptions): FastifyInstance {
     if (!query.success) {
       return reply.code(400).send(errorBody("invalid_query", firstIssue(query.error)));
     }
-    const { pageSize, q } = query.data;
+    const { pageSize, q, activeOnly } = query.data;
     const now = new Date();
-    const result = await listCompetitors(db, { page: query.data.page, pageSize, search: q });
+    const result = await listCompetitors(db, {
+      page: query.data.page,
+      pageSize,
+      search: q,
+      activeOnly,
+    });
     // The body is the plain array of the contract. What a pager needs goes in headers.
     void reply
       .header("x-page", result.page)
@@ -134,6 +146,22 @@ export function buildApp({ db, log, config }: AppOptions): FastifyInstance {
     return reply.code(204).send();
   });
 
+  // Pausing keeps the history and stops the polling. Both calls answer with the
+  // competitor as it is now, and both can be repeated without changing anything more.
+  for (const [action, apply] of [
+    ["pause", pauseCompetitor],
+    ["resume", resumeCompetitor],
+  ] as const) {
+    app.post<IdParams>(`/api/competitors/:id/${action}`, async (request, reply) => {
+      const { id } = request.params;
+      const found = (await apply(db, id)) ? await getCompetitor(db, id) : null;
+      if (found === null) {
+        return reply.code(404).send(errorBody("not_tracked", "This competitor is not tracked."));
+      }
+      return toCompetitorDto(found.competitor, found.title, new Date());
+    });
+  }
+
   app.get<IdParams>("/api/competitors/:id/snapshots", async (request, reply) => {
     const query = snapshotsQuery.safeParse(request.query);
     if (!query.success) {
@@ -154,6 +182,7 @@ export function buildApp({ db, log, config }: AppOptions): FastifyInstance {
       now,
       polling: {
         competitors: counts.competitors,
+        paused: counts.paused,
         intervalSeconds: config.POLL_INTERVAL_SECONDS,
         overdue: counts.overdue,
         oldestOverdueSeconds: counts.oldestOverdueSeconds,

@@ -16,6 +16,8 @@ export interface CompetitorDto {
   lastPollStatus: CompetitorRow["lastPollStatus"];
   lastChangedAt: Date | null;
   changedInLast24h: boolean;
+  /** When tracking was paused, or null while the competitor is being polled. */
+  pausedAt: Date | null;
 }
 
 export interface ChangeDto {
@@ -50,6 +52,8 @@ export interface StatusDto {
   now: Date;
   polling: {
     competitors: number;
+    /** Competitors whose tracking is paused. They are not polled and never overdue. */
+    paused: number;
     intervalSeconds: number;
     /** Competitors whose next poll time has passed. */
     overdue: number;
@@ -83,6 +87,7 @@ export function toCompetitorDto(
     lastChangedAt,
     changedInLast24h:
       lastChangedAt !== null && now.getTime() - lastChangedAt.getTime() < ONE_DAY_MS,
+    pausedAt: competitor.pausedAt,
   };
 }
 

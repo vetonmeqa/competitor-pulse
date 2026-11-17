@@ -320,8 +320,30 @@ the model to treat it as data and not to follow instructions inside it.
 ### Removing a competitor
 
 It deletes the competitor and its history. Adding it again starts fresh. The app asks for
-confirmation first. A soft delete that keeps the 90 days would be the alternative if
-"remove" turned out to mean "pause".
+confirmation first, and points to pausing as the way to keep the history.
+
+### Pausing a competitor
+
+Pausing stops the polling and keeps everything else: the history, the current state and
+the "changed in the last 24 hours" flag. Resuming continues from there.
+
+- **One nullable column,** `paused_at`. The poller only takes competitors where it is
+  empty.
+- **The poll queue index leaves paused competitors out.** A paused competitor stays "due"
+  for ever. In a plain index the poller would read past every one of them on each claim.
+  Measured with 1,000 paused among 6,000: the claim reads 1 row, where a plain index reads
+  1,001.
+- **Resuming polls at once.** The competitor goes to the head of the queue, as a new one
+  does, so the gap in its history ends within seconds.
+- **Both calls can be repeated.** Pausing twice keeps the first pause time. Resuming a
+  competitor that is not paused leaves its place in the queue alone.
+- **Paused competitors are not behind schedule.** The status endpoint counts them
+  separately and leaves them out of the queue lag.
+- **The list can show active competitors only,** filtered by the server like the search.
+
+**Known limits:** a poll already in flight when the pause arrives is still recorded.
+Retention keeps running, so a competitor paused for more than 90 days ends with an empty
+history. A summary that was pending is still written.
 
 ### The competitor list: paging and search
 
@@ -440,18 +462,20 @@ GET    /api/competitors                      -> [Competitor, ...]   one page, by
 GET    /api/competitors/:id                  -> Competitor, or 404
 POST   /api/competitors      { "id": string } -> 201, or 409 if tracked, 400 if invalid
 DELETE /api/competitors/:id                  -> 204, or 404
+POST   /api/competitors/:id/pause            -> Competitor, or 404
+POST   /api/competitors/:id/resume           -> Competitor, or 404
 GET    /api/competitors/:id/snapshots        -> [Snapshot, ...]   newest first
 GET    /api/status                           -> queue lag, LLM usage, worker state
 GET    /api/health                           -> { "ok": true }
 ```
 
-`competitors` accepts `?page=` (from 1), `?pageSize=` (default 25, at most 100) and `?q=`,
-which keeps the competitors whose id or current title contains the text. The counts are
-in response headers:
+`competitors` accepts `?page=` (from 1), `?pageSize=` (default 25, at most 100), `?q=`,
+which keeps the competitors whose id or current title contains the text, and
+`?activeOnly=true`, which leaves out the paused ones. The counts are in response headers:
 
 | Header | Meaning |
 | --- | --- |
-| `X-Total-Count` | Competitors that match `q` |
+| `X-Total-Count` | Competitors that match `q` and `activeOnly` |
 | `X-Total-Tracked` | All tracked competitors |
 | `X-Page` | The page returned: the last one when the page asked for is past the end |
 | `X-Page-Size` | The page size used |
@@ -482,7 +506,8 @@ A snapshot has the fields of the brief plus a few more:
 ```
 
 A competitor has `id`, `createdAt`, `availability` (`unknown`, `listed` or `delisted`),
-`title`, `lastPolledAt`, `lastPollStatus`, `lastChangedAt` and `changedInLast24h`.
+`title`, `lastPolledAt`, `lastPollStatus`, `lastChangedAt`, `changedInLast24h` and
+`pausedAt` (null while it is being polled).
 
 ## Development and tests
 
@@ -504,8 +529,8 @@ Backend settings for this mode are in [backend/.env.example](backend/.env.exampl
 | Command | Where | What it runs |
 | --- | --- | --- |
 | `npm test` | `backend` | 192 unit tests. No database needed |
-| `npm run test:integration` | `backend` | 159 tests against PostgreSQL, in a separate `pulse_test` database |
-| `npm test` | `frontend` | 99 component and page tests against a stubbed API |
+| `npm run test:integration` | `backend` | 174 tests against PostgreSQL, in a separate `pulse_test` database |
+| `npm test` | `frontend` | 107 component and page tests against a stubbed API |
 | `npm run typecheck`, `npm run lint` | both | Strict TypeScript and type-aware lint rules |
 | `npm run db:generate` | `backend` | Writes a new migration after a schema change |
 
