@@ -9,13 +9,13 @@ app shows the list of competitors and each competitor's history.
 - [Try it](#try-it)
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
-- [Decisions](#decisions)
-- [The numbers that do not fit](#the-numbers-that-do-not-fit)
-- [Left out on purpose](#left-out-on-purpose)
+- [Design decisions](#design-decisions)
+- [Scaling to production](#scaling-to-production)
+- [Not included yet](#not-included-yet)
 - [API](#api)
 - [Development and tests](#development-and-tests)
 - [Deploy on Render](#deploy-on-render)
-- [AI tools](#ai-tools)
+- [How it was built](#how-it-was-built)
 
 ## Run it
 
@@ -30,16 +30,16 @@ docker compose up --build
 Then open **http://localhost:8080**.
 
 This starts the whole system: PostgreSQL, a one-shot migration step, the API, the worker,
-the web app, and the provided listing source and mock LLM. No `.env` file or API key is
-needed.
+the web app, and a bundled listing source and mock LLM to run against. No `.env` file or
+API key is needed.
 
 | Service | Address | What it is |
 | --- | --- | --- |
 | `web` | http://localhost:8080 | The React app, served by nginx, which also forwards `/api` |
 | `api` | http://localhost:3000 | The HTTP API |
 | `worker` | no port | The poller and the summariser |
-| `listing-source` | http://localhost:4002 | The provided data source, unchanged |
-| `mock-llm` | http://localhost:4001 | The provided mock LLM, unchanged |
+| `listing-source` | http://localhost:4002 | A simulated competitor website: slow, flaky and rate-limited on purpose |
+| `mock-llm` | http://localhost:4001 | A mock LLM that speaks the OpenAI Chat Completions format |
 | `db` | localhost:5432 | PostgreSQL 16 (user, password and database are all `pulse`) |
 
 ## Try it
@@ -114,12 +114,12 @@ LLM_BASE_URL=http://host.docker.internal:4001/v1 \
 docker compose up --build db migrate api worker web
 ```
 
-The backend only ever talks to the source over HTTP. It does not import the source's code
-or read its `listings.json`.
+The backend only ever talks to the source over HTTP, so any service that answers
+`GET /listings/:id` in the same shape can take its place.
 
-### Which LLM is used
+### LLM providers
 
-The **provided mock LLM** is the default, so the system runs with no key. It echoes the
+The **bundled mock LLM** is the default, so the system runs with no key. It echoes the
 start of the prompt instead of writing a real summary. The prompt therefore leads with the
 changed fields, which keeps the mock's output readable.
 
@@ -171,7 +171,7 @@ Code map: [backend/src/domain](backend/src/domain) holds the rules with no I/O,
 [backend/src/api](backend/src/api) the HTTP API, and [frontend/src](frontend/src) the
 React app.
 
-## Decisions
+## Design decisions
 
 ### What counts as a change
 
@@ -199,8 +199,8 @@ Before comparing, each value is normalised:
 
 A failed or incomplete poll never changes what the next good poll is compared with.
 
-**Why the revert rule:** one fixture competitor flips its tagline between two values five
-times, which looks like an A/B test. Each flip is a real change, but it needs no LLM to
+**Why the revert rule:** one of the sample competitors flips its tagline between two
+values five times, which looks like an A/B test. Each flip is a real change, but it needs no LLM to
 explain, and without the rule a single flapping competitor would drain the daily cap.
 
 **Considered instead:**
@@ -246,7 +246,7 @@ restart); a Redis queue such as BullMQ (another service to run, for a queue that
 indexed column); a token bucket with bursts (a burst is exactly what trips the source's
 limit); a fixed rate with no tuning (measured below).
 
-Measured against the provided source, with the source set to allow 2 requests per second
+Measured against the bundled source, with the source set to allow 2 requests per second
 and the backend still configured for 5:
 
 | | Accepted per second | Rejected with 429 |
@@ -258,7 +258,7 @@ and the backend still configured for 5:
 ### How the history is stored
 
 - **One row per poll** in `snapshots`, including unchanged and failed polls, because the
-  brief asks to see those.
+  timeline shows those too.
 - **Listing text is stored once per distinct version** in `listing_versions`. A snapshot
   points at a version, so an unchanged poll does not store the text again.
 - **The snapshot row is also the summary job.** There is no separate queue table.
@@ -270,8 +270,8 @@ read the index in order.
 
 **Considered instead:** storing the full listing on every poll (several times the size,
 mostly duplicates); collapsing runs of identical polls into one row with a count (much
-smaller, but individual fetch times are lost, and the brief asks for the history
-including unchanged polls).
+smaller, but individual fetch times are lost, and the timeline shows every poll,
+including the unchanged ones).
 
 Migrations use Drizzle: the schema is TypeScript, `drizzle-kit` generates plain SQL files
 that are committed, and one command applies them.
@@ -354,7 +354,7 @@ history. A summary that was pending is still written.
 - **Search looks at every tracked competitor,** not at the rows on screen. It matches the
   id and the current title, in any letter case. `%` and `_` in the search text are plain
   characters.
-- **The body stays the array of the brief's contract.** The counts travel in response
+- **The response body stays a plain array of competitors.** The counts travel in response
   headers: how many competitors match and how many are tracked, for "12 of 6,000
   competitors" and "Showing 26–50 of 312".
 - **A page past the end returns the last page.** That happens in normal use: the only
@@ -378,7 +378,7 @@ someone is paging moves the rows after it by one place.
 
 - **The timeline loads 50 snapshots,** and "Show older snapshots" asks for the 50 before
   the last one shown: `?before=<snapshot id>`. The whole 90 days can be reached this way,
-  and the body stays the array of the brief's contract.
+  and the response stays a plain array.
 - **The query jumps to its place in the index.** It compares the pair (time, id) with the
   cursor's, which the timeline index answers directly. Measured on 208,000 rows, for 50
   snapshots that are 8,000 deep in one competitor's history: 13 pages read in 0.09 ms.
@@ -393,7 +393,12 @@ each, so the list never has a gap or a repeat. Someone who has loaded 20 pages c
 requests per refresh. Refreshing only the newest page would be cheaper, but a summary
 still pending on an older page would then stop updating.
 
-## The numbers that do not fit
+## Scaling to production
+
+The design target is 6,000 tracked competitors, each polled every 15 minutes, against a
+source that allows 5 requests per second, with at most 2,000 LLM calls a day and 90 days
+of history. Taken together, those targets ask for more than the source and the LLM budget
+allow. For each one, this is what the system does today and what I would change.
 
 **1. Polling.** 6,000 competitors every 15 minutes is 6.67 requests per second. The
 source allows 5.
@@ -410,8 +415,8 @@ What I would do, in this order:
   long tail gets 30 or 60.
 - Adapt the interval to how often each listing changes. Most rarely do.
 
-I did not build tiering, because it breaks the brief's "every 15 minutes" and should be a
-product decision.
+I did not build tiering, because it gives up the 15-minute target for part of the list,
+and that should be a product decision.
 
 **2. LLM calls.** At 5 requests per second there are up to 432,000 polls a day. If only
 0.5% of them are changes that need the LLM, that is 2,160 calls, already over 2,000.
@@ -436,9 +441,11 @@ because deleting half a million rows a day from one table causes bloat and vacuu
 **4. One worker.** 5 requests per second is nowhere near CPU-bound, so one worker is
 enough, and the standby gives failover. Many workers would need a shared rate limiter.
 
-## Left out on purpose
+## Not included yet
 
-- **Authentication.** The brief says one internal user.
+These are outside the current scope. Each would be a good addition.
+
+- **Authentication.** It is an internal tool for a single user.
 - **Tiered or adaptive polling, budget pacing, merging pending summaries.** Described
   above.
 - **Table partitioning.** Described above.
@@ -485,7 +492,7 @@ which keeps the competitors whose id or current title contains the text, and
 `snapshots` accepts `?limit=` (default 100, at most 1000), `?changedOnly=true` and
 `?before=<snapshot id>`, which returns only the snapshots older than that one.
 
-A snapshot has the fields of the brief plus a few more:
+A snapshot looks like this:
 
 ```jsonc
 {
@@ -536,8 +543,8 @@ Backend settings for this mode are in [backend/.env.example](backend/.env.exampl
 | `npm run typecheck`, `npm run lint` | both | Strict TypeScript and type-aware lint rules |
 | `npm run db:generate` | `backend` | Writes a new migration after a schema change |
 
-Beyond the automated tests, each part was run against the provided servers using their
-control endpoints, and the full Docker stack was put through these scenarios: more work
+Beyond the automated tests, each part was run against the bundled source and mock LLM
+using their control endpoints, and the full Docker stack was put through these scenarios: more work
 than the rate limit allows, a rate limit lowered without notice, forced source failures,
 a slow LLM, a failing LLM, the daily cap, a database restart, and an API container being
 replaced.
@@ -589,8 +596,20 @@ What to know before using it:
 - **Poll interval.** The blueprint sets `POLL_INTERVAL_SECONDS` to `900`, the production
   value, not the `30` used in Docker.
 
-## AI tools
+## How it was built
 
-I used **Claude Code** (Anthropic) for the whole project: planning, implementation and
-tests. I worked through it one step at a time, read and questioned each step before
-committing it, and made every commit myself.
+- **Design before code.** The data model, the scheduling model and the handling of LLM
+  failures were settled before implementation started. [Design decisions](#design-decisions)
+  records each choice together with the alternatives that were rejected and why.
+- **Small steps, each one finished.** The system was built in order, from the schema up
+  to the Docker stack. Every step was reviewed, verified and committed on its own before
+  the next one began.
+- **Measured, not assumed.** The figures in this document come from measurements: the
+  rate limiter's settings from a simulation of the source's own algorithm, the storage
+  size from 200,000 sample rows, and the queue's behaviour from giving it more work than
+  the rate limit allows.
+- **Tested by breaking it.** Automated tests cover the rules, the database behaviour and
+  the UI. On top of that, the full stack was run through failure scenarios: a source that
+  fails, stalls and lowers its limit, an LLM that is slow or down, an exhausted budget,
+  and a database restart.
+- **AI tool.** Claude Code was used as an AI tool for implementation and tests.
