@@ -1,6 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
-import { useCompetitor, useSnapshots } from "../api/hooks";
+import { useCompetitor, useSetCompetitorPaused, useSnapshots } from "../api/hooks";
 import { Badge } from "../components/Badge";
 import { Notice } from "../components/Notice";
 import { SnapshotCard } from "../components/SnapshotCard";
@@ -15,6 +15,7 @@ export function TimelinePage() {
   const changedOnly = searchParams.get("show") === "changes";
   const snapshots = useSnapshots(id, changedOnly);
   const competitor = useCompetitor(id).data;
+  const setPaused = useSetCompetitorPaused();
   const state = competitor ? competitorState(competitor) : null;
 
   const notTracked = snapshots.error instanceof ApiError && snapshots.error.status === 404;
@@ -40,8 +41,27 @@ export function TimelinePage() {
 
       {competitor !== undefined && competitor.pausedAt !== null && (
         <Notice tone="warn">
-          Tracking was paused <Timestamp iso={competitor.pausedAt} format="relative" />. No new
-          snapshots are recorded until it is resumed from <Link to="/">the list</Link>.
+          <div className={styles.paused}>
+            <p>
+              Tracking was paused <Timestamp iso={competitor.pausedAt} format="relative" />. No
+              new snapshots are recorded until it is resumed.
+            </p>
+            <button
+              className="button"
+              type="button"
+              disabled={setPaused.isPending}
+              onClick={() => {
+                setPaused.mutate({ id, paused: false });
+              }}
+            >
+              Resume tracking
+            </button>
+          </div>
+        </Notice>
+      )}
+      {setPaused.isError && (
+        <Notice tone="danger" role="alert">
+          Could not resume tracking: {setPaused.error.message}
         </Notice>
       )}
 

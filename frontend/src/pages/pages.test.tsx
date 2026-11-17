@@ -536,10 +536,71 @@ describe("competitor timeline", () => {
     renderApp("/competitors/acme-crm");
 
     expect(await screen.findByText(/Tracking was paused/)).toHaveTextContent(
-      "No new snapshots are recorded until it is resumed from the list.",
+      "No new snapshots are recorded until it is resumed.",
     );
     // The history is still there.
     expect(screen.getAllByRole("article")).toHaveLength(3);
+  });
+
+  it("resumes tracking from the timeline", async () => {
+    const user = userEvent.setup();
+    let paused = true;
+    const view = () => competitor({ pausedAt: paused ? "2026-09-10T11:00:00.000Z" : null });
+    const requests = mockApi({
+      "GET /status": status,
+      "GET /competitors/acme-crm": () => ({ body: view() }),
+      "GET /competitors/acme-crm/snapshots": () => ({ body: history }),
+      "POST /competitors/acme-crm/resume": () => {
+        paused = false;
+        return { body: view() };
+      },
+    });
+    renderApp("/competitors/acme-crm");
+
+    await user.click(await screen.findByRole("button", { name: "Resume tracking" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Tracking was paused/)).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Resume tracking" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Paused")).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.method === "POST")).toMatchObject([
+      { path: "/competitors/acme-crm/resume" },
+    ]);
+  });
+
+  it("has no Resume button for a competitor that is being tracked", async () => {
+    mockApi({
+      "GET /status": status,
+      "GET /competitors/acme-crm": () => ({ body: competitor() }),
+      "GET /competitors/acme-crm/snapshots": () => ({ body: history }),
+    });
+    renderApp("/competitors/acme-crm");
+    await screen.findAllByRole("article");
+    expect(screen.queryByRole("button", { name: "Resume tracking" })).not.toBeInTheDocument();
+  });
+
+  it("says so when resuming fails", async () => {
+    const user = userEvent.setup();
+    mockApi({
+      "GET /status": status,
+      "GET /competitors/acme-crm": () => ({
+        body: competitor({ pausedAt: "2026-09-10T11:00:00.000Z" }),
+      }),
+      "GET /competitors/acme-crm/snapshots": () => ({ body: history }),
+      "POST /competitors/acme-crm/resume": () => ({
+        status: 500,
+        body: { error: { code: "internal_error", message: "Something went wrong." } },
+      }),
+    });
+    renderApp("/competitors/acme-crm");
+
+    await user.click(await screen.findByRole("button", { name: "Resume tracking" }));
+    expect(
+      await screen.findByText("Could not resume tracking: Something went wrong."),
+    ).toBeInTheDocument();
+    // Still paused, so the button is still there to try again.
+    expect(screen.getByRole("button", { name: "Resume tracking" })).toBeEnabled();
   });
 
   it("shows the snapshots in the order the API returns them, newest first", async () => {
